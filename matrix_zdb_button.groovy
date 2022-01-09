@@ -35,12 +35,9 @@ def configure() {
     Integer offset = (ch - 1) * 8
     parent.setParameter(parameterNumber = 16 + offset, size = 1, value = p16.toInteger())
     parent.setParameter(parameterNumber = 17 + offset, size = 2, value = p17.toInteger())
-    // parent.setParameter(parameterNumber = 18 + offset, size = 1, value = p18.toInteger())
     parent.setParameter(parameterNumber = 19 + offset, size = 1, value = p19.toInteger())
     parent.setParameter(parameterNumber = 20 + offset, size = 1, value = p20.toInteger())
     parent.setParameter(parameterNumber = 21 + offset, size = 1, value = 0)
-    // parent.setParameter(parameterNumber = 22 + offset, size = 4, value = p22.toInteger())
-    // parent.setParameter(parameterNumber = 23 + offset, size = 4, value = p23.toInteger())
 }
 
 def updated() {
@@ -49,13 +46,13 @@ def updated() {
 
 void on() { 
     if (logEnable) log.debug "$device on"
-    parent.sendButtonEvent("pushed", state.button, "physical")
+    parent.sendButtonEvent("pushed", state.button, "digital")
     parent.childOn(device.deviceNetworkId)
 }
 
 void off() {
     if (logEnable) log.debug "$device off"
-    parent.sendButtonEvent("pushed", state.button, "physical")
+    parent.sendButtonEvent("pushed", state.button, "digital")
     parent.childOff(device.deviceNetworkId)
 }
 
@@ -103,34 +100,4 @@ Integer rgbwToInt(red, green, blue, white) {
         ((blue  & 0xFF) << 8 ) | 
         ((white & 0xFF) << 0 )
     )
-}
-
-// Association groups
-def setDefaultAssociations() {
-    if (logEnable) log.debug "$device setDefaultAssociations"
-    def smartThingsHubID = (zwaveHubNodeId.toString().format( '%02x', zwaveHubNodeId )).toUpperCase()
-    state.defaultG1 = [smartThingsHubID]
-    state.defaultG2 = []
-    state.defaultG3 = []
-}
-
-def setAssociationGroup(group, nodes, action, endpoint = null){
-    if (logEnable) log.debug "$device setAssociationGroup $group, $nodes, $acion, $endpoint"
-    if (!state."desiredAssociation${group}") {
-        state."desiredAssociation${group}" = nodes
-    } else {
-        switch (action) {
-            case 0:
-                state."desiredAssociation${group}" = state."desiredAssociation${group}" - nodes
-            break
-            case 1:
-                state."desiredAssociation${group}" = state."desiredAssociation${group}" + nodes
-            break
-        }
-    }
-}
-
-def processAssociations() {
-    if (logEnable) log.debug "$device processAssociations"
-    parent.processAssociations()
 }

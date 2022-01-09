@@ -83,7 +83,6 @@ def configure() {
 
     cmds << secure(zwave.versionV1.versionGet().format())
     cmds << secure(zwave.manufacturerSpecificV2.manufacturerSpecificGet().format())
-    // cmds << secure(zwave.firmwareUpdateMdV2.firmwareMdGet().format())
 
     // Fix white level of device LEDs
     setParameter(parameterNumber = 14, size = 4, value = 4283782400)
@@ -96,31 +95,13 @@ def refresh() {
     state.bin = -2
     def cmds = []
     cmds << secure(zwave.basicV2.basicGet().format())
-    // cmds << zwave.switchBinaryV1.switchBinaryGet().format()
 
     (1..5).each { endpoint ->
         cmds << secure(encap(zwave.basicV2.basicGet(), endpoint))
-        // cmds << encap(zwave.switchBinaryV1.switchBinaryGet(), endpoint)
     }
  
     delayBetween(cmds, 100)
 }
-
-def recreateChildDevices() {
-    if (logEnable) log.debug "recreateChildDevices"
-    deleteChildren()
-    createChildDevices()
-}
-
-def deleteChildren() {
-	if (logEnable) log.debug "deleteChildren"
-	def children = getChildDevices()
-    
-    children.each {child->
-  		deleteChildDevice(child.deviceNetworkId)
-    }
-}
-
 
 def parse(String description) {
     if (logEnable) log.debug "parse $description"
@@ -226,15 +207,13 @@ def zwaveEvent(hubitat.zwave.commands.centralscenev3.CentralSceneNotification cm
             action = "released"
             break
         case 2: //holding
-            //if (state."${button}" == 0){
-                state."${button}" = 1
-                runInMillis(200,delayHold,[data:button])
-            //}
+            state."${button}" = 1
+            runInMillis(200,delayHold,[data:button])
             break
-        case 3: //double tap, 4 is tripple tap
+        case 3: //double tap
             action = "doubleTapped"
             break
-        case 4: //double tap, 4 is tripple tap
+        case 4: //tripple tap
             action = "trippleTapped"
             break
     }
@@ -278,7 +257,7 @@ def zwaveEvent(hubitat.zwave.commands.configurationv2.ConfigurationReport cmd) {
 }
 
 def zwaveEvent(hubitat.zwave.commands.configurationv1.ConfigurationReport cmd) {
-    if (logEnable) log.debug "configurationv2.ConfigurationReport: parameter ${cmd.parameterNumber} with a byte size of ${cmd.size} is set to ${cmd.configurationValue}"
+    if (logEnable) log.debug "configurationv1.ConfigurationReport: parameter ${cmd.parameterNumber} with a byte size of ${cmd.size} is set to ${cmd.configurationValue}"
 }
 
 def zwaveEvent(hubitat.zwave.commands.versionv1.VersionReport cmd, endpoint) {
@@ -349,7 +328,7 @@ def childOff(String dni) {
 
 def childSetLevel(String dni, level, duration = 0) {
     if (logEnable) log.debug "childSetLevel $dni, $level, $duration"
-    if (level > 99) level = 99
+    if (level > 99) level = 100
     state.bin = level
     setLevelCmd(level as Integer, duration as Integer, channelNumber(dni))
 }
@@ -365,11 +344,11 @@ private setLevelCmd(value, duration, endpoint) {
     if (logEnable) log.debug "setLevelCmd, value: $value, duration: $duration, endpoint: $endpoint"
     
     def cmds = []
-    cmds << secure(encap(zwave.basicV2.basicSet(value: value), endpoint))
-    // cmds << secure(encap(zwave.switchMultilevelV3.switchMultilevelSet(value: value, dimmingDuration: duration), endpoint))
+    // cmds << secure(encap(zwave.basicV2.basicSet(value: value), endpoint))
+    cmds << secure(encap(zwave.switchMultilevelV3.switchMultilevelSet(value: value, dimmingDuration: duration), endpoint))
     cmds << secure(encap(zwave.basicV2.basicGet(), endpoint))
     if (logEnable) log.debug "setLevelCmd cmds: $cmds"
-    return delayBetween(cmds, 1100)
+    return delayBetween(cmds, duration * 1000 + 100)
 }
 
 private onOffCmd(value, endpoint) {
@@ -379,7 +358,7 @@ private onOffCmd(value, endpoint) {
     cmds << secure(encap(zwave.basicV2.basicSet(value: value), endpoint))
     cmds << secure(encap(zwave.basicV2.basicGet(), endpoint))
     if (logEnable) log.debug "onOffCmd cmds: $cmds"
-    return delayBetween(cmds, 1000)
+    return delayBetween(cmds, 100)
 }
 
 private channelNumber(String dni) {
@@ -641,7 +620,6 @@ def processAssociations(){
                         refreshGroup = true
                     }
                 }
-                // if (refreshGroup == true) cmds << secure(zwave.associationV2.associationGet(groupingIdentifier:i))
                 if (refreshGroup == true) cmds << secure(zwave.multiChannelAssociationV2.multiChannelAssociationGet(groupingIdentifier:i))
                 else if (txtEnable) log.info "${device.displayName}: There are no association actions to complete for group $i"
             }
@@ -692,44 +670,4 @@ def zwaveEvent(hubitat.zwave.commands.associationv2.AssociationGroupingsReport c
     sendEvent(name: "groups", value: cmd.supportedGroupings)
     if (txtEnable) log.info "${device.displayName}: Supported association groups: ${cmd.supportedGroupings}"
     state.associationGroups = cmd.supportedGroupings
-}
-
-def singleChannelsSet(){
-    if (txtEnable) log.info "${device.displayName}: singleChannelsSet"
-    def cmds = []
-    for (int i = 1; i <= 5; i++) {
-        cmds << secure(encap(zwave.associationV2.associationSet(groupingIdentifier:1, nodeId:zwaveHubNodeId), i))
-    }
-    return cmds
-}
-
-def singleChannelsRemove() {
-    if (txtEnable) log.info "${device.displayName}: singleChannelsRemove"
-    def cmds = []
-    for (int i = 1; i <= 5; i++) {
-        cmds << secure(encap(zwave.associationV2.associationRemove(groupingIdentifier:1, nodeId:zwaveHubNodeId), i))
-    }
-    return cmds
-}
-
-
-
-def refreshMultiChannels() {
-    associationGroups = state.associationGroups
-    def cmds = []
-    cmds << secure(zwave.multiChannelAssociationV2.multiChannelAssociationRemove(groupingIdentifier: 1, multiChannelNodeIds: [[nodeId: zwaveHubNodeId, bitAddress: 0, endPointId: 0]]))
-    for (int i = 0; i <= 5; i++) {
-        cmds << secure(encap(zwave.multiChannelAssociationV2.multiChannelAssociationGet(groupingIdentifier:1), i))
-    }
-    return cmds
-}
-
-def singleChannelsRefresh() {
-    if (txtEnable) log.info "${device.displayName}: singleChannelsRefresh"
-    associationGroups = state.associationGroups
-    def cmds = []
-    for (int i = 0; i <= 5; i++) {
-        cmds << secure(encap(zwave.associationV2.associationGet(groupingIdentifier:1), i))
-    }
-    return cmds
 }

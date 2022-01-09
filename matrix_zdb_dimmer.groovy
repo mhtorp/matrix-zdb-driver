@@ -10,7 +10,6 @@ metadata {
 
         command "configure"
         command "refresh"
-        command "setAssociationGroup"
     }
 
     preferences {
@@ -104,34 +103,4 @@ void stopLevelChange() {
 
 void refresh() {
     parent.childGet(device.deviceNetworkId)
-}
-
-// Association groups
-def setDefaultAssociations() {
-    if (logEnable) log.debug "$device setDefaultAssociations"
-    def smartThingsHubID = (zwaveHubNodeId.toString().format( '%02x', zwaveHubNodeId )).toUpperCase()
-    state.defaultG1 = [smartThingsHubID]
-    state.defaultG2 = []
-    state.defaultG3 = []
-}
-
-def setAssociationGroup(group, nodes, action, endpoint = null){
-    if (logEnable) log.debug "$device setAssociationGroup $group, $nodes, $acion, $endpoint"
-    if (!state."desiredAssociation${group}") {
-        state."desiredAssociation${group}" = nodes
-    } else {
-        switch (action) {
-            case 0:
-                state."desiredAssociation${group}" = state."desiredAssociation${group}" - nodes
-            break
-            case 1:
-                state."desiredAssociation${group}" = state."desiredAssociation${group}" + nodes
-            break
-        }
-    }
-}
-
-def processAssociations() {
-    if (logEnable) log.debug "$device processAssociations"
-    parent.processAssociations()
 }
