@@ -50,9 +50,6 @@ metadata {
    preferences {
         input name: "logEnable", type: "bool", title: "Enable debug logging", defaultValue: true
         input name: "txtEnable", type: "bool", title: "Enable descriptionText logging", defaultValue: true
-        input name: "background_red",   type: "number", title: "Shared RGB-level (red)",   range: "0..255", defaultValue: 255
-        input name: "background_green", type: "number", title: "Shared RGB-level (green)", range: "0..255", defaultValue: 85
-        input name: "background_blue",  type: "number", title: "Shared RGB-level (blue)",  range: "0..255", defaultValue: 85
     }
 }
 
@@ -88,9 +85,8 @@ def configure() {
     cmds << secure(zwave.manufacturerSpecificV2.manufacturerSpecificGet().format())
     // cmds << secure(zwave.firmwareUpdateMdV2.firmwareMdGet().format())
 
-    log.debug "colors: ${background_red.intValue()}, ${background_green.intValue()}, ${background_blue.intValue()}"
-    Integer colorInt = rgbwToInt(background_red.intValue(), background_green.intValue(), background_blue.intValue(), 0)
-    setParameter(parameterNumber = 14, size = 4, value = colorInt) // Default colorInt is 4.283.782.400 or -11.184.896
+    // Fix white level of device LEDs
+    setParameter(parameterNumber = 14, size = 4, value = 4283782400)
 
     delayBetween(cmds, 200)
 }
