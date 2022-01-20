@@ -464,6 +464,11 @@ Integer rgbwToInt(red, green, blue, white) {
     )
 }
 
+private scale_between_ranges(Float n, Float s_min, Float s_max, Float t_min, Float t_max) {
+    x = (n - s_min) / (s_max - s_min) * (t_max - t_min) + t_min
+    return x as Float
+}
+
 void dimmerEvents(rawValue, type, endpoint = null){
     if (logEnable) log.debug "dimmerEvents value: ${rawValue}, type: ${type}, endpoint: ${endpoint}, state.bin: ${state.bin}"
 
@@ -472,7 +477,7 @@ void dimmerEvents(rawValue, type, endpoint = null){
         childDevice = childDevices.find{it.deviceNetworkId.endsWith("$endpoint")}
     }
 
-    Integer levelValue = rawValue.toInteger()
+    Integer levelValue = childDevice.level_scaled_to_raw(rawValue.toInteger())
     Integer crntLevel = (device.currentValue("level") ?: 50).toInteger()
     Integer crntSwitch = (device.currentValue("switch") == "on") ? 1 : 0
 
