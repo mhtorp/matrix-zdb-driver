@@ -59,25 +59,38 @@ def get_dimmer_on_value(on_level) {
     )
 }
 
-def normalize_level(level) {
+private scale_between_ranges(Float n, Float s_min, Float s_max, Float t_min, Float t_max) {
+    x = (n - s_min) / (s_max - s_min) * (t_max - t_min) + t_min
+    return x as Float
+}
+
+def level_raw_to_scaled(level) {
     level = level > 100 ? 100 : level
     level = level < 0 ? 0 : level
-    upper = p6
+    x = scale_between_ranges(level, s_min = 0, s_max = 100, t_min = p5, t_max = p6)
+    return x as Integer
+}
+
+def level_scaled_to_raw(level) {
     lower = p5
-    x = level / 100 * (upper - lower) + lower
+    upper = p6
+    level = level < lower ? lower : level
+    level = level > upper ? upper : level
+    x = scale_between_ranges(level, s_min = lower, s_max = upper, t_min = 0, t_max = 100)
     return x as Integer
 }
 
 void setLevel(level, duration = 0) {
+    level = level_raw_to_scaled(level)
     if (!prestaging || (device.currentValue("switch").toString() == "on")) {
         if (logEnable) log.debug "$device setLevel $level $duration"
-        parent.childSetLevel(device.deviceNetworkId, normalize_level(level), duration)
+        parent.childSetLevel(device.deviceNetworkId, level, duration)
     }
     def levelText = "${device.displayName} (${endpoint}) set to $level %"
     if (prestaging) {
         if (logEnable) log.debug "$device prestaging $level on $prestage_button"
         levelText = "${device.displayName} (${endpoint}) pre-staged to $level %"
-        parent.setParameter(parameterNumber = 10 + prestage_button * 8, size = 4, value = get_dimmer_on_value(normalize_level(level)))
+        parent.setParameter(parameterNumber = 10 + prestage_button * 8, size = 4, value = get_dimmer_on_value(level))
     }
     sendEvent(name: "level", value: level, descriptionText: levelText, type:"digital",unit:"%")
 }
