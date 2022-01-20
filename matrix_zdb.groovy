@@ -477,7 +477,8 @@ void dimmerEvents(rawValue, type, endpoint = null){
         childDevice = childDevices.find{it.deviceNetworkId.endsWith("$endpoint")}
     }
 
-    Integer levelValue = childDevice.level_scaled_to_raw(rawValue.toInteger())
+    Integer levelValue = rawValue.toInteger()
+    Integer scaledLevel = childDevice.level_scaled_to_raw(levelValue)
     Integer crntLevel = (device.currentValue("level") ?: 50).toInteger()
     Integer crntSwitch = (device.currentValue("switch") == "on") ? 1 : 0
 
@@ -495,7 +496,7 @@ void dimmerEvents(rawValue, type, endpoint = null){
                 switchValue = switchValues[1]
                 switchText = "${switchVerbs[crntSwitch & 1]} ${switchValue}"// --c3"
                 if (levelValue == crntLevel) levelText = "${levelVerbs[1]} ${crntLevel}%"// --c3a"
-                else levelText = "${levelVerbs[0]} ${levelValue}%"// --c3b"
+                else levelText = "${levelVerbs[0]} ${scaledLevel}%"// --c3b"
             }
             break
         case 0..100: //digital set level -basic report
@@ -503,7 +504,7 @@ void dimmerEvents(rawValue, type, endpoint = null){
             switchText = "${switchVerbs[crntSwitch & 1]} ${switchValue}"// --c4"
             if (levelValue == 0) levelValue = 1
             levelVerb = levelVerbs[levelValue == crntLevel ? 1 : 0]
-            levelText = "${verb} ${levelValue}%"// --c4"
+            levelText = "${verb} ${scaledLevel}%"// --c4"
             break
         case -11: //digital on -basic report
             switchValue = switchValues[1]
@@ -522,7 +523,7 @@ void dimmerEvents(rawValue, type, endpoint = null){
             } else {
                 switchValue = switchValues[1]
                 switchText = "${switchVerbs[1]} ${switchValue}"// --c11"
-                levelText = "${levelVerbs[1]} ${levelValue}%"// --c11"
+                levelText = "${levelVerbs[1]} ${scaledLevel}%"// --c11"
             }
             break
         default :
@@ -543,9 +544,9 @@ void dimmerEvents(rawValue, type, endpoint = null){
         levelText = "${device.displayName} (${endpoint}) ${levelText} [${type}]"
         if (txtEnable) log.info "${levelText}"
         if (childDevice) {
-            childDevice.sendEvent(name: "level", value: levelValue, descriptionText: levelText, type:type,unit:"%")
+            childDevice.sendEvent(name: "level", value: scaledLevel, descriptionText: levelText, type:type,unit:"%")
         } else {
-            sendEvent(name: "level", value: levelValue, descriptionText: levelText, type:type,unit:"%")
+            sendEvent(name: "level", value: scaledLevel, descriptionText: levelText, type:type,unit:"%")
         }
     }
     state.bin = -1
