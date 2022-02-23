@@ -119,12 +119,12 @@ void off() {
 }
 
 void startLevelChange(direction) {
-    List<String> cmds = parent.childStartLevelChange(device.deviceNetworkId, direction)
+    List<String> cmds = parent.childStartLevelChange(device, direction)
     parent.sendCommands(cmds)
 }
 
 void stopLevelChange() {
-    List<String> cmds = parent.childStopLevelChange(device.deviceNetworkId)
+    List<String> cmds = parent.childStopLevelChange(device)
     parent.sendCommands(cmds)
 }
 
