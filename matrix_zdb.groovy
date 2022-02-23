@@ -13,7 +13,7 @@ import groovy.transform.Field
 @Field static Map switchValues = [0:"off",1:"on"]
 
 metadata {
-    definition (name: "Matrix ZDB 5100 refactor", namespace: "mhtorp", author: "Mathias Husted Torp") {
+    definition (name: "Matrix ZDB 5100", namespace: "mhtorp", author: "Mathias Husted Torp") {
         capability "Actuator"
         capability "Configuration"
         capability "Refresh"

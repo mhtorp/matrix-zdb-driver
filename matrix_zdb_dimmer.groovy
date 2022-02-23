@@ -2,7 +2,7 @@
  *  LogicGroup Matrix ZDB Dimmer Endpoint Driver
  */
 metadata {
-    definition (name: "Matrix ZDB 5100 refactor (Dimmer)", namespace: "mhtorp", author: "Mathias Husted Torp") {
+    definition (name: "Matrix ZDB 5100 (Dimmer)", namespace: "mhtorp", author: "Mathias Husted Torp") {
         capability "Configuration"
         capability "Refresh"
         capability "Switch"

@@ -2,7 +2,7 @@
  *  LogicGroup Matrix ZDB Button Endpoint Driver
  */
 metadata {
-    definition (name: "Matrix ZDB 5100 refactor (Button)", namespace: "mhtorp", author: "Mathias Husted Torp") {
+    definition (name: "Matrix ZDB 5100 (Button)", namespace: "mhtorp", author: "Mathias Husted Torp") {
         capability "ColorControl"
         capability "Configuration"
         capability "Flash"
