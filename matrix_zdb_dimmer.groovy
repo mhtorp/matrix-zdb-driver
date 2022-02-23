@@ -97,9 +97,10 @@ void presetLevel(level) {
         Integer scaledLevel = level_raw_to_scaled(level as Integer)
         if (txtEnable) log.info("Pre-staging button $prestage_button to $level %")
         levelText = "${device.displayName} (${endpoint}) pre-staged to $level %"
-        Integer parameterNumber = 10 + prestage_button * 8
-        String cmds = parent.setParameter(parameterNumber = parameterNumber, size = 4, value = get_dimmer_on_value(scaledLevel))
         state.prestaged_level = level
+        Integer parameterNumber = 10 + prestage_button * 8
+        List<String> cmds = []
+        cmds << parent.setParameter(parameterNumber = parameterNumber, size = 4, value = get_dimmer_on_value(scaledLevel))
         parent.sendCommands(cmds)
         sendEvent(name: "level", value: level, descriptionText: levelText, type:"digital",unit:"%")
     }
@@ -107,7 +108,7 @@ void presetLevel(level) {
 
 void on() {
     if (logEnable) log.debug "$device on"
-    def level = device.currentValue("level") > 0 ? device.currentValue("level") : 255
+    Integer level = device.currentValue("level") > 0 ? device.currentValue("level") : 255
     List<String> cmds = parent.childSetLevel(device, level = level, duration = p3.toInteger())
     parent.sendCommands(cmds)
 }
@@ -119,7 +120,7 @@ void off() {
 }
 
 void startLevelChange(direction) {
-    List<String> cmds = parent.childStartLevelChange(device, direction)
+    List<String> cmds = parent.childStartLevelChange(device, direction, p2.toInteger())
     parent.sendCommands(cmds)
 }
 

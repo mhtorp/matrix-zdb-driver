@@ -365,11 +365,11 @@ List<String> childSetLevel(child, level, duration) {
     return cmds
 }
 
-List<String> childStartLevelChange(child, String direction){
+List<String> childStartLevelChange(child, String direction, Integer duration){
     Integer upDown = direction == "down" ? 1 : 0
     Integer endpoint = channelNumber(child.deviceNetworkId)
     List<String> cmds = []
-    cmd = zwave.switchMultilevelV4.switchMultilevelStartLevelChange(upDown: upDown, ignoreStartLevel: 1, startLevel: 0)
+    cmd = zwave.switchMultilevelV4.switchMultilevelStartLevelChange(upDown: upDown, dimmingDuration: duration, ignoreStartLevel: true)
     cmds << secure(encap(cmd, endpoint))
     return cmds
 }
