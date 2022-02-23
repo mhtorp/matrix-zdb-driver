@@ -2,14 +2,13 @@
  *  LogicGroup Matrix ZDB Dimmer Endpoint Driver
  */
 metadata {
-    definition (name: "Matrix ZDB 5100 (Dimmer)", namespace: "logicgroup", author: "Mathias Husted Torp") {
+    definition (name: "Matrix ZDB 5100 refactor (Dimmer)", namespace: "mhtorp", author: "Mathias Husted Torp") {
+        capability "Configuration"
+        capability "Refresh"
         capability "Switch"
         capability "SwitchLevel"
-        capability "Actuator"
         capability "ChangeLevel"
-
-        command "configure"
-        command "refresh"
+        capability "LevelPreset"
     }
 
     preferences {
@@ -32,88 +31,104 @@ metadata {
 }
 
 def configure() {
-    parent.setParameter(parameterNumber = 1, size = 1, value = p1.toInteger())
-    parent.setParameter(parameterNumber = 2, size = 1, value = p2.toInteger())
-    parent.setParameter(parameterNumber = 3, size = 1, value = p3.toInteger())
-    parent.setParameter(parameterNumber = 4, size = 1, value = p4.toInteger())
-    min_dim = min_dim > 99 ? 99 : min_dim
-    max_dim = max_dim > 99 ? 99 : max_dim
-    parent.setParameter(parameterNumber = 5, size = 1, value = min_dim.toInteger())
-    parent.setParameter(parameterNumber = 6, size = 1, value = max_dim.toInteger())
-    if (!prestaging) {
-        parent.setParameter(parameterNumber = 10 + prestage_button * 8, size = 4, value = get_dimmer_on_value(255))
-    }
+    updated()
 }
 
 def updated() {
-    configure()
+    List<String> cmds = []
+    cmds << parent.setParameter(parameterNumber = 1, size = 1, value = p1)
+    cmds << parent.setParameter(parameterNumber = 2, size = 1, value = p2)
+    cmds << parent.setParameter(parameterNumber = 3, size = 1, value = p3)
+    cmds << parent.setParameter(parameterNumber = 4, size = 1, value = p4 as Long)
+    min_dim = p5 > 99 ? 99 : p5
+    max_dim = p6 > 99 ? 99 : p6
+    cmds << parent.setParameter(parameterNumber = 5, size = 1, value = min_dim)
+    cmds << parent.setParameter(parameterNumber = 6, size = 1, value = max_dim)
+    if (!prestaging) {
+        cmds << parent.setParameter(parameterNumber = (10 + prestage_button * 8) as Integer, size = 4, value = get_dimmer_on_value(p6))
+    }
+    parent.sendCommands(delayBetween(cmds, 100))
 }
 
-def get_dimmer_on_value(on_level) {
-    on_level = on_level != 0 ? on_level : 255
+def get_dimmer_on_value(Long on_level) {
+    on_level = on_level != 0 ? on_level * 2.55 : 255
     return (
-        ((1   & 0xFF) << 24) |
+        ((1 & 0xFF) << 24) |
         ((on_level & 0xFF) << 16) |
-        ((0  & 0xFF) << 8 ) |
+        ((0 & 0xFF) << 8 ) |
         ((0 & 0xFF) << 0 )
     )
 }
 
-private scale_between_ranges(Float n, Float s_min, Float s_max, Float t_min, Float t_max) {
-    x = (n - s_min) / (s_max - s_min) * (t_max - t_min) + t_min
-    return x as Float
+private Integer scale_between_ranges(Float n, Float s_min, Float s_max, Float t_min, Float t_max) {
+    Float x = (n - s_min) / (s_max - s_min) * (t_max - t_min) + t_min
+    return x.round() as Integer
 }
 
-def level_raw_to_scaled(level) {
+Integer level_raw_to_scaled(Integer level) {
     level = level > 100 ? 100 : level
     level = level < 0 ? 0 : level
-    x = scale_between_ranges(level, s_min = 0, s_max = 100, t_min = p5, t_max = p6)
-    return x as Integer
+    return scale_between_ranges(level as Float, s_min = 0, s_max = 100, t_min = p5, t_max = p6)
 }
 
-def level_scaled_to_raw(level) {
+Integer level_scaled_to_raw(Integer level) {
     lower = p5
     upper = p6
     level = level < lower ? lower : level
     level = level > upper ? upper : level
-    x = scale_between_ranges(level, s_min = lower, s_max = upper, t_min = 0, t_max = 100)
-    return x as Integer
+    Integer scaledLevel = scale_between_ranges(level as Float, s_min = lower, s_max = upper, t_min = 0, t_max = 100)
+    if (logEnable) log.debug("level_scaled_to_raw: Scaled $level to $scaledLevel")
+    return scaledLevel
 }
 
-void setLevel(level, duration = 0) {
-    level = level_raw_to_scaled(level)
-    if (!prestaging || (device.currentValue("switch").toString() == "on")) {
-        if (logEnable) log.debug "$device setLevel $level $duration"
-        parent.childSetLevel(device.deviceNetworkId, level, duration)
-    }
-    def levelText = "${device.displayName} (${endpoint}) set to $level %"
-    if (prestaging) {
-        if (logEnable) log.debug "$device prestaging $level on $prestage_button"
+void setLevel(level, duration = p3) {
+    level = level_raw_to_scaled(level as Integer)
+    if (logEnable) log.debug "$device setLevel $level $duration"
+    List<String> cmds = parent.childSetLevel(device, level, duration)
+    parent.sendCommands(cmds)
+}
+
+void presetLevel(level) {
+    if (!prestaging) {
+        log.warn("Prestaging is not enabled")
+    } else if (device.currentValue("switch").toString() == "on") {
+        setLevel(level)
+    } else {
+        Integer scaledLevel = level_raw_to_scaled(level as Integer)
+        if (txtEnable) log.info("Pre-staging button $prestage_button to $level %")
         levelText = "${device.displayName} (${endpoint}) pre-staged to $level %"
-        parent.setParameter(parameterNumber = 10 + prestage_button * 8, size = 4, value = get_dimmer_on_value(level))
+        Integer parameterNumber = 10 + prestage_button * 8
+        String cmds = parent.setParameter(parameterNumber = parameterNumber, size = 4, value = get_dimmer_on_value(scaledLevel))
+        state.prestaged_level = level
+        parent.sendCommands(cmds)
+        sendEvent(name: "level", value: level, descriptionText: levelText, type:"digital",unit:"%")
     }
-    sendEvent(name: "level", value: level, descriptionText: levelText, type:"digital",unit:"%")
 }
 
 void on() {
     if (logEnable) log.debug "$device on"
     def level = device.currentValue("level") > 0 ? device.currentValue("level") : 255
-    parent.childSetLevel(device.deviceNetworkId, level = level, duration = p3.toInteger())
+    List<String> cmds = parent.childSetLevel(device, level = level, duration = p3.toInteger())
+    parent.sendCommands(cmds)
 }
 
 void off() {
     if (logEnable) log.debug "$device off"
-    parent.childOff(device.deviceNetworkId)
+    List<String> cmds = parent.childSetLevel(device, level = 0, duration = p3.toInteger())
+    parent.sendCommands(cmds)
 }
 
 void startLevelChange(direction) {
-    parent.childStartLevelChange(device.deviceNetworkId, direction)
+    List<String> cmds = parent.childStartLevelChange(device.deviceNetworkId, direction)
+    parent.sendCommands(cmds)
 }
 
 void stopLevelChange() {
-    parent.childStopLevelChange(device.deviceNetworkId)
+    List<String> cmds = parent.childStopLevelChange(device.deviceNetworkId)
+    parent.sendCommands(cmds)
 }
 
 void refresh() {
-    parent.childGet(device.deviceNetworkId)
+    List<String> cmds = parent.childBasicGet(device)
+    parent.sendCommands(cmds)
 }
