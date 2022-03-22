@@ -12,7 +12,7 @@ metadata {
     }
 
     preferences {
-        input name: "logEnable", type: "bool", title: "Enable debug logging", defaultValue: true
+        input name: "logEnable", type: "bool", title: "Enable debug logging", defaultValue: false
         input name: "txtEnable", type: "bool", title: "Enable descriptionText logging", defaultValue: true
         input name: "prestaging", type: "bool", title: "Enable level pre-staging", defaultValue: true
         input name: "prestage_button", type: "number", title: "Button to use for level pre-staging", range: "1..4", defaultValue: 1
@@ -51,7 +51,7 @@ def updated() {
 }
 
 def get_dimmer_on_value(Long on_level) {
-    on_level = on_level != 0 ? on_level * 2.55 : 255
+    on_level = on_level != 0 ? on_level : 255
     return (
         ((1 & 0xFF) << 24) |
         ((on_level & 0xFF) << 16) |
@@ -82,34 +82,38 @@ Integer level_scaled_to_raw(Integer level) {
 }
 
 void setLevel(level, duration = p3) {
-    level = level_raw_to_scaled(level as Integer)
-    if (logEnable) log.debug "$device setLevel $level $duration"
-    List<String> cmds = parent.childSetLevel(device, level, duration)
+    Integer scaledLevel = level_raw_to_scaled(level as Integer)
+    if (logEnable) log.debug "$device setLevel $level ($scaledLevel) $duration"
+    List<String> cmds = parent.childSetLevel(device, scaledLevel, duration)
     parent.sendCommands(cmds)
 }
 
 void presetLevel(level) {
     if (!prestaging) {
         log.warn("Prestaging is not enabled")
-    } else if (device.currentValue("switch").toString() == "on") {
-        setLevel(level)
     } else {
+        if (device.currentValue("switch").toString() == "on") {
+            setLevel(level)
+        } else {
+            sendEvent(name: "level", value: level, descriptionText: levelText, type: "digital", unit: "%")
+        }
         Integer scaledLevel = level_raw_to_scaled(level as Integer)
-        if (txtEnable) log.info("Pre-staging button $prestage_button to $level %")
+        if (txtEnable) log.info("${device.displayName} Pre-staging button $prestage_button to $level %")
+        if (logEnable) log.debug("${device.displayName} Pre-stage button $prestage_button: $level ($scaledLevel) %")
         levelText = "${device.displayName} (${endpoint}) pre-staged to $level %"
         state.prestaged_level = level
         Integer parameterNumber = 10 + prestage_button * 8
         List<String> cmds = []
         cmds << parent.setParameter(parameterNumber = parameterNumber, size = 4, value = get_dimmer_on_value(scaledLevel))
         parent.sendCommands(cmds)
-        sendEvent(name: "level", value: level, descriptionText: levelText, type:"digital",unit:"%")
     }
 }
 
 void on() {
     if (logEnable) log.debug "$device on"
     Integer level = device.currentValue("level") > 0 ? device.currentValue("level") : 255
-    List<String> cmds = parent.childSetLevel(device, level = level, duration = p3.toInteger())
+    Integer scaledLevel = level_raw_to_scaled(level as Integer)
+    List<String> cmds = parent.childSetLevel(device, level = scaledLevel, duration = p3.toInteger())
     parent.sendCommands(cmds)
 }
 
