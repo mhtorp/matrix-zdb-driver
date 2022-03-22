@@ -120,7 +120,7 @@ void zwaveEvent(hubitat.zwave.Command cmd, endpoint = null) {
 }
 
 String setParameter(Integer parameterNumber, Integer size, Long value) {
-    log.info "setParameter: $parameterNumber, $size, $value"
+    if (logEnable) log.debug "setParameter: $parameterNumber, $size, $value"
     String cmd = secure(zwave.configurationV1.configurationSet(
         scaledConfigurationValue: value as Integer,
         parameterNumber: parameterNumber as Integer,
