@@ -34,6 +34,7 @@ metadata {
         input name: "logEnable", type: "bool", title: "Enable debug logging", defaultValue: true
         input name: "txtEnable", type: "bool", title: "Enable descriptionText logging", defaultValue: true
         input name: "fakeButtonPush", type: "bool", title: "Send button push event on switch toggle", defaultValue: true
+        input name: "enhancedLedControl", type: "bool", title: "Enable Enhanced LED control", defaultValue: true
     }
 }
 
@@ -48,6 +49,15 @@ List<String> updated() {
     log.warn "debug logging is: ${logEnable == true}"
     log.warn "description logging is: ${txtEnable == true}"
     if (logEnable) runIn(5400,logsOff)
+    return setPrefParams()
+}
+
+List<String> setPrefParams() {
+    // Enable Enhanced LED control
+    Integer i = enhancedLedControl ? 1 : 0
+    List<String> cmds = []
+    cmds << setParameter(parameterNumber = 10, size = 1, value = i)
+    return cmds
 }
 
 void logsOff(){
@@ -75,6 +85,11 @@ List<String> configure() {
     // Fix white level of device LEDs
     cmds << setParameter(parameterNumber = 14, size = 4, value = 4283782400)
 
+    List<String> param_cmds = setPrefParams()
+    for(cmd in param_cmds) {
+        cmds << cmd
+    }
+
     childDevices.each{ child ->
         List<String> config_cmds = child.configure()
         for (cmd in config_cmds) {
@@ -82,7 +97,7 @@ List<String> configure() {
         }
     }
 
-    delayBetween(cmds, 100)
+    delayBetween(cmds, 300)
 }
 
 List<String> refresh() {
@@ -324,7 +339,8 @@ List<String> flash(child, rateToFlash, red, green, blue) {
 private List<String> flashCmd(rateToFlash, red, green, blue, endpoint) {
     if (logEnable) log.debug "flash, red: $red, green: $green, blue: $blue, rateToFlash: $rateToFlash, endpoint: $endpoint"
     def cmds = []
-    cmds << secure(encap(zwave.switchColorV1.switchColorSet(red: red, green: green, blue: blue, warmWhite: (128 + 16 + rateToFlash)), endpoint))
+    Integer white = (128 + 16 + (rateToFlash / 100).round())
+    cmds << secure(encap(zwave.switchColorV1.switchColorSet(red: red, green: green, blue: blue, warmWhite: white), endpoint))
     // cmds << secure(encap(zwave.switchColorV1.switchColorSet(warmWhite: (128 + 16 + rateToFlash)), endpoint))
     cmds << secure(encap(zwave.switchColorV1.switchColorGet(colorComponent: "warmWhite"), endpoint))
     
