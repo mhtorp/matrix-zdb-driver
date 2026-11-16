@@ -1,109 +1,243 @@
-/*
- *  LogicGroup Matrix ZDB Button Endpoint Driver
+/**
+ *  Matrix ZDB 5100 (Button) — child driver for one button (endpoints 1-4) of the Logic Group MATRIX ZDB5100
+ *
+ *  Created by the "Matrix ZDB 5100" parent driver. The switch state is the button's on/off state; the colour
+ *  commands control the button's RGB LED. Button events (pushed, held, ...) are on the parent device.
+ *
+ *  Source and documentation: https://github.com/mhtorp/matrix-zdb-driver
  */
+
+import groovy.transform.Field
+
+// Each button has 8 parameters: button 1 uses 16-23, button 2 24-31, button 3 32-39, button 4 40-47.
+// offset: position within the button's block. legacy: setting name used by version 1.x.
+@Field static final List<Map> BUTTON_PARAMS = [
+    [offset: 0, name: "buttonMode", legacy: "p16", size: 1, title: "Button function",
+     options: [0: "Toggle on/off, hold to dim", 1: "Turn off after timer (staircase light)", 2: "Turn on after timer",
+               3: "Always off / dim down (for button pairs)", 4: "Always on / dim up (for button pairs)"],
+     help: "Device default: Toggle."],
+    [offset: 1, name: "timerDuration", legacy: "p17", size: 2, title: "Timer (seconds)", range: "0..43200",
+     help: "Used by the timer functions. Device default 300."],
+    [offset: 3, name: "binarySwitchMode", legacy: "p19", size: 1, title: "On/off commands from the hub control",
+     options: [0: "The LED only", 1: "The button state and LED", 2: "Everything, as a physical press (also sends to associated devices)"],
+     help: "Device default: The LED only."],
+    [offset: 4, name: "ledMode", legacy: "p20", size: 1, title: "LED indication",
+     options: [0: "Only by colour commands", 1: "Follow button state", 2: "Follow button state (inverted)",
+               5: "Follow dimmer on/off", 6: "Follow dimmer on/off (inverted)", 7: "On for 5 seconds when pressed"],
+     help: "Device default: On for 5 seconds when pressed."],
+    [offset: 5, name: "colorCommandMode", size: 1, title: "Colour commands set",
+     options: [0: "The LED directly, until the next press", 1: "The off-state colour", 2: "The on-state colour"],
+     help: "Ignored while Enhanced LED control is enabled on the parent device. Device default: The off-state colour."],
+    [offset: 6, name: "onColor", size: 4, color: true, title: "LED colour in on state (RRGGBB)",
+     help: "Device default 00007F (blue)."],
+    [offset: 7, name: "offColor", size: 4, color: true, title: "LED colour in off state (RRGGBB)",
+     help: "Device default 2F2F2F (dim white)."]
+]
+
 metadata {
-    definition (name: "Matrix ZDB 5100 (Button)", namespace: "mhtorp", author: "Mathias Husted Torp") {
+    definition(name: "Matrix ZDB 5100 (Button)", namespace: "mhtorp", author: "Mathias Husted Torp",
+               importUrl: "https://raw.githubusercontent.com/mhtorp/matrix-zdb-driver/master/matrix_zdb_button.groovy") {
+        capability "Actuator"
+        capability "Switch"
         capability "ColorControl"
-        capability "Configuration"
         capability "Flash"
         capability "Refresh"
-        capability "Switch"
+        capability "Configuration"
 
-        command "setColorOn",  [[name: "red*", type: "NUMBER", range:"0..255"], [name: "green*", type: "NUMBER", range:"0..255"], [name: "blue*", type: "NUMBER", range:"0..255"]]
-        command "setColorOff", [[name: "red*", type: "NUMBER", range:"0..255"], [name: "green*", type: "NUMBER", range:"0..255"], [name: "blue*", type: "NUMBER", range:"0..255"]]
+        command "setColorOn",  [[name: "red*", type: "NUMBER", range: "0..255"], [name: "green*", type: "NUMBER", range: "0..255"], [name: "blue*", type: "NUMBER", range: "0..255"]]
+        command "setColorOff", [[name: "red*", type: "NUMBER", range: "0..255"], [name: "green*", type: "NUMBER", range: "0..255"], [name: "blue*", type: "NUMBER", range: "0..255"]]
     }
 
     preferences {
-        input name: "logEnable", type: "bool", title: "Enable debug logging", defaultValue: true
-        input name: "txtEnable", type: "bool", title: "Enable descriptionText logging", defaultValue: true
-        input name: "p16", type: "enum", title: "16. Button operation mode", options:[[0:"Default operation (Toggle on/off and dim/brighten)"],[1:"Turn off timer"],[2:"Turn on timer"],[3:"Always turn off or dim"],[4:"Always turn on or brighten"]], defaultValue: 0
-        input name: "p17", type: "number", title: "17. Timer duration in seconds for parameter 16", range:"0..43200", defaultValue: 300
-        input name: "p19", type: "enum", title: "19. Binary Switch Set behaviour", options: [[0: "Only control LED"], [1: "Control switch status and LED"], [2: "As if physical switch activated, including sending commands to association groups"]], defaultValue: 0
-        input name: "p20", type: "enum", title: "20. Button LED mode", options:[[0:"Only control by external commands"],[1:"Sync with button status"],[2:"Sync with inverted button status"],[5:"Sync with dimmer status (on/off)"],[6:"Sync with inverted dimmer status (on/off)"],[7:"Turn on for 5 seconds upon push of button"]], defaultValue: 7
+        BUTTON_PARAMS.each { p ->
+            Map opts = [name: p.name, title: p.title, description: p.help]
+            if (p.options) {
+                input(opts + [type: "enum", options: p.options])
+            } else if (p.color) {
+                input(opts + [type: "text"])
+            } else {
+                input(opts + [type: "number", range: p.range])
+            }
+        }
+        input "group4Enabled", "enum", title: "Single press sends a level to associated dimmers (group 4)",
+            options: [1: "Yes", 0: "No"], description: "Device default: Yes."
+        input "group4OnLevel", "number", title: "Level sent when turning on", range: "0..255",
+            description: "0-99, or 255 for the dimmer's last level. Device default 255."
+        input "group4OffLevel", "number", title: "Level sent when turning off", range: "0..99",
+            description: "Device default 0."
+        input "logEnable", "bool", title: "Enable debug logging (turns off after 30 minutes)", defaultValue: false
+        input "txtEnable", "bool", title: "Enable description text logging", defaultValue: true
     }
 }
 
-void configure() {
-    updated()
+/* ---------- Lifecycle ---------- */
+
+void installed() {
+    logInfo "installed"
 }
 
 void updated() {
-    // ch1: 16-23
-    // ch2: 24-31
-    // ch3: 32-39
-    // ch4: 40-47
-    def ch = device.deviceNetworkId.split("-")[-1] as Integer
-    state.button = ch 
-    Integer offset = (ch - 1) * 8
-    cmds = []
-    cmds << parent.setParameter(parameterNumber = 16 + offset, size = 1, value = p16.toInteger())
-    cmds << parent.setParameter(parameterNumber = 17 + offset, size = 2, value = p17.toInteger())
-    cmds << parent.setParameter(parameterNumber = 19 + offset, size = 1, value = p19.toInteger())
-    cmds << parent.setParameter(parameterNumber = 20 + offset, size = 1, value = p20.toInteger())
-    cmds << parent.setParameter(parameterNumber = 21 + offset, size = 1, value = 0)
-    parent.sendCommands(cmds)
+    logInfo "preferences saved"
+    if (logEnable) runIn(1800, "logsOff") else unschedule("logsOff")
+    migrateSettings()
+    configure()
 }
 
+void configure() {
+    ["button", "red", "green", "blue"].each { state.remove(it) }
+    parent?.componentSetParameters(device, desiredParameters())
+}
+
+void logsOff() {
+    log.warn "${device.displayName}: debug logging disabled"
+    device.updateSetting("logEnable", [value: "false", type: "bool"])
+}
+
+// Also called by the parent during its configure(); must not call back into the parent.
+List<Map> desiredParameters() {
+    Integer base = baseParameter()
+    List<Map> result = []
+    BUTTON_PARAMS.each { p ->
+        def raw = setting(p.name, p.legacy)
+        Long value = p.color ? colorToParam(raw?.toString()) : toLong(raw)
+        result << [num: base + p.offset, size: p.size, value: value] // null = no longer managed
+    }
+
+    // Group 4 (Multilevel Switch Set) settings share one 4-byte parameter: enabled, on level, off level, 0.
+    if ([settings.group4Enabled, settings.group4OnLevel, settings.group4OffLevel].any { it != null && it.toString() != "" }) {
+        Long enabled = orDefault(toLong(settings.group4Enabled), 1L)
+        Long onLevel = orDefault(toLong(settings.group4OnLevel), 255L)
+        Long offLevel = Math.min(orDefault(toLong(settings.group4OffLevel), 0L), 99L)
+        if (onLevel > 99 && onLevel != 255) onLevel = 99
+        result << [num: base + 2, size: 4, value: (enabled << 24) | (onLevel << 16) | (offLevel << 8)]
+    } else {
+        result << [num: base + 2, size: 4, value: null]
+    }
+    logDebug "desired parameters: ${result}"
+    return result
+}
+
+/* ---------- Commands ---------- */
+
 void on() {
-    if (logEnable) log.debug "${device.displayName} on"
-    List<String> cmds = parent.childBinaryOn(device)
-    parent.sendCommands(cmds)
+    logDebug "on()"
+    parent?.componentOn(device)
 }
 
 void off() {
-    if (logEnable) log.debug "${device.displayName} off"
-    List<String> cmds = parent.childBinaryOff(device)
-    parent.sendCommands(cmds)
+    logDebug "off()"
+    parent?.componentOff(device)
 }
 
 void refresh() {
-    if (logEnable) log.debug "${device.displayName} refresh"
-    List<String> cmds = parent.childBinaryGet(device)
-    parent.sendCommands(cmds)
+    parent?.componentRefresh(device)
 }
 
-void setColor(colorMap) {
-    if (logEnable) log.debug "${device.displayName} setColor: Color map: $colorMap"
-    List rgb = hubitat.helper.ColorUtils.hsvToRGB([colorMap.hue, colorMap.saturation, colorMap.level])
-    state.red = rgb[0]
-    state.green = rgb[1]
-    state.blue = rgb[2]
-    List<String> cmds = parent.childSetColor(device, colorMap)
-    parent.sendCommands(cmds)
+void setColor(Map colorMap) {
+    logDebug "setColor(${colorMap})"
+    parent?.componentSetColor(device, colorMap)
 }
 
-void flash(rateToFlash) {
-    List<String> cmds = parent.flash(device, rateToFlash, state.red, state.green, state.blue)
-    parent.sendCommands(cmds)
+void setHue(hue) {
+    parent?.componentSetHue(device, hue)
 }
 
+void setSaturation(saturation) {
+    parent?.componentSetSaturation(device, saturation)
+}
 
-List<String> setColorParam(Integer param, Integer red, Integer green, Integer blue) {
-    def ch = state.button as Integer
-    param = param + (ch - 1) * 8
-    Integer colorInt = rgbwToInt(red as Integer, green as Integer, blue as Integer, 0)
-    List<String> cmds = []
-    cmds << parent.setParameter(parameterNumber = param, size = 4, value = colorInt)
-    return cmds
+void flash(rateToFlash = null) {
+    parent?.componentFlash(device, rateToFlash)
 }
 
 void setColorOn(red, green, blue) {
-    if (txtEnable) log.info "setColorOn (${state.button}: Color map: [$red, $green, $blue]"
-    List<String> cmds = setColorParam(22, red as Integer, green as Integer, blue as Integer)
-    parent.sendCommands(cmds)
+    setStateColor("onColor", 6, red, green, blue)
 }
 
 void setColorOff(red, green, blue) {
-    if (txtEnable) log.info "setColorOff (${state.button}: Color map: [$red, $green, $blue]"
-    List<String> cmds = setColorParam(23, red as Integer, green as Integer, blue as Integer)
-    parent.sendCommands(cmds)
+    setStateColor("offColor", 7, red, green, blue)
 }
 
-Integer rgbwToInt(Integer red, Integer green, Integer blue, Integer white) {
-    return (
-        ((red   & 0xFF) << 24) | 
-        ((green & 0xFF) << 16) | 
-        ((blue  & 0xFF) << 8 ) | 
-        ((white & 0xFF) << 0 )
-    )
+/* ---------- Events from the parent ---------- */
+
+// Child devices receive no Z-Wave frames; the parent sends events through parse(List<Map>) below.
+void parse(String description) {
+    logDebug "parse(String) is not used: ${description}"
+}
+
+void parse(List<Map> events) {
+    events.each { Map evt ->
+        if (txtEnable && evt.descriptionText && device.currentValue(evt.name)?.toString() != evt.value?.toString()) {
+            log.info evt.descriptionText
+        }
+        sendEvent(evt)
+    }
+}
+
+/* ---------- Helpers ---------- */
+
+// Stores the colour as the preference too, so the parent's parameter sync does not undo it.
+private void setStateColor(String settingName, Integer offset, red, green, blue) {
+    List<Integer> rgb = [red, green, blue].collect { Math.max(0, Math.min(255, toLong(it)?.intValue() ?: 0)) }
+    String hex = String.format("%02X%02X%02X", rgb[0], rgb[1], rgb[2])
+    logInfo "${settingName == 'onColor' ? 'on' : 'off'}-state LED colour set to ${hex}"
+    device.updateSetting(settingName, [value: hex, type: "text"])
+    parent?.componentSetParameters(device, [[num: baseParameter() + offset, size: 4, value: colorToParam(hex)]])
+}
+
+private Integer buttonNumber() {
+    return device.deviceNetworkId.split("-")[-1] as Integer
+}
+
+private Integer baseParameter() {
+    return 16 + (buttonNumber() - 1) * 8
+}
+
+private def setting(String name, String legacy) {
+    def value = settings[name]
+    if ((value == null || value.toString().trim() == "") && legacy) value = settings[legacy]
+    return value
+}
+
+private Long colorToParam(String hex) {
+    String h = hex?.trim()?.replaceFirst(/^#/, "")
+    if (!h) return null
+    if (!(h ==~ /[0-9A-Fa-f]{6}/)) {
+        log.warn "${device.displayName}: '${hex}' is not a colour in RRGGBB format"
+        return null
+    }
+    return Long.parseLong(h, 16) << 8
+}
+
+private Long orDefault(Long value, Long fallback) {
+    return value != null ? value : fallback
+}
+
+private Long toLong(value) {
+    if (value == null || value.toString().trim() == "") return null
+    try {
+        return new BigDecimal(value.toString().trim()).longValue()
+    } catch (NumberFormatException ignored) {
+        return null
+    }
+}
+
+// Moves settings from version 1.x to their new names.
+private void migrateSettings() {
+    BUTTON_PARAMS.findAll { it.legacy }.each { p ->
+        def old = settings[p.legacy]
+        if (old == null) return
+        if (settings[p.name] == null) {
+            device.updateSetting(p.name, [value: old.toString(), type: p.options ? "enum" : "number"])
+        }
+        device.removeSetting(p.legacy)
+    }
+}
+
+private void logDebug(String msg) {
+    if (logEnable) log.debug "${device.displayName}: ${msg}"
+}
+
+private void logInfo(String msg) {
+    if (txtEnable) log.info "${device.displayName}: ${msg}"
 }

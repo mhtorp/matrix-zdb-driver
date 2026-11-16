@@ -1,139 +1,306 @@
-/*
- *  LogicGroup Matrix ZDB Dimmer Endpoint Driver
+/**
+ *  Matrix ZDB 5100 (Dimmer) — child driver for the built-in dimmer (endpoint 5) of the Logic Group MATRIX ZDB5100
+ *
+ *  Created by the "Matrix ZDB 5100" parent driver.
+ *
+ *  Source and documentation: https://github.com/mhtorp/matrix-zdb-driver
  */
+
+import groovy.transform.Field
+
+// legacy: setting name used by version 1.x.
+@Field static final List<Map> DIMMER_PARAMS = [
+    [num: 2, name: "dimDuration", legacy: "p2", size: 1, title: "Dimming duration, 0-100%", range: "0..255",
+     help: "Used when a button is held and for level changes without a duration. 0 = instant, 1-127 = seconds, 128-255 = 1-128 minutes. Device default 5."],
+    [num: 3, name: "onOffDuration", legacy: "p3", size: 1, title: "On/off duration", range: "0..255",
+     help: "Used for on/off. 0 = instant, 1-127 = seconds, 128-255 = 1-128 minutes. Device default 0."],
+    [num: 4, name: "dimmingMode", legacy: "p4", size: 1, title: "Dimming mode",
+     options: [0: "No dimming (on/off only)", 1: "Trailing edge (LED, electronic transformers)", 2: "Leading edge (iron-core transformers)"],
+     help: "Device default: Trailing edge. Iron-core transformers must use leading edge, or the dimmer can be damaged."],
+    [num: 5, name: "minLevel", legacy: "p5", size: 1, title: "Minimum level (%)", range: "0..99",
+     help: "Actual output at the lowest level; the device spreads 1-99% over the minimum-maximum range. Device default 0."],
+    [num: 6, name: "maxLevel", legacy: "p6", size: 1, title: "Maximum level (%)", range: "1..99",
+     help: "Actual output at 99%. Device default 99."]
+]
+
+// Parameter 1 is a bitmask (button 1 = 1, 2 = 2, 3 = 4, 4 = 8); one option per combination.
+@Field static final Map DIMMER_BUTTONS = (0..15).collectEntries { Integer mask ->
+    List<Integer> buttons = (1..4).findAll { mask & (1 << (it - 1)) }
+    [mask, mask ? (buttons.size() == 1 ? "Button " : "Buttons ") + buttons.join(" + ") : "None (hub control only)"]
+}
+
 metadata {
-    definition (name: "Matrix ZDB 5100 (Dimmer)", namespace: "mhtorp", author: "Mathias Husted Torp") {
-        capability "Configuration"
-        capability "Refresh"
+    definition(name: "Matrix ZDB 5100 (Dimmer)", namespace: "mhtorp", author: "Mathias Husted Torp",
+               importUrl: "https://raw.githubusercontent.com/mhtorp/matrix-zdb-driver/master/matrix_zdb_dimmer.groovy") {
+        capability "Actuator"
         capability "Switch"
         capability "SwitchLevel"
         capability "ChangeLevel"
         capability "LevelPreset"
+        capability "Refresh"
+        capability "Configuration"
     }
 
     preferences {
-        input name: "logEnable", type: "bool", title: "Enable debug logging", defaultValue: false
-        input name: "txtEnable", type: "bool", title: "Enable descriptionText logging", defaultValue: true
-        input name: "prestaging", type: "bool", title: "Enable level pre-staging", defaultValue: true
-        input name: "prestage_button", type: "number", title: "Button to use for level pre-staging", range: "1..4", defaultValue: 1
-        input name: "p1", type: "number", title: "1. Pushbutton(s) for dimmer", range: "0..15",
-            description: "0: None, 1: Button 1, 2: Button 2, 4: Button 3, 8: Button 4. Add the numbers to select multiple buttons"
-        input name: "p2", type: "number", title: "2. Duration of dimming", range:"0..255", defaultValue: 5
-        input name: "p3", type: "number", title: "3. Duration of on/off", range:"0..255", defaultValue: 0
-        input name: "p4", type: "enum",   title: "4. Dimming mode", options:[[0:"No dimming"], [1:"Trailing Edge - TE"], [2:"Leading Edge - LE"]], defaultValue: 1
-        input name: "p5", type: "number", title: "5. Dimmer min level", range: "0..100", defaultValue: 0
-        input name: "p6", type: "number", title: "6. Dimmer max level", range: "1..100", defaultValue: 100
-        input name: "p18", type: "number", title: "18. Dimmer on level (0 to remember last state)", range: "0..99", defaultValue: 0
-        input name: "p26", type: "number", title: "26. Dimmer on level (0 to remember last state)", range: "0..99", defaultValue: 0
-        input name: "p34", type: "number", title: "34. Dimmer on level (0 to remember last state)", range: "0..99", defaultValue: 0
-        input name: "p42", type: "number", title: "42. Dimmer on level (0 to remember last   state)", range: "0..99", defaultValue: 0
-    }
-}
-
-def configure() {
-    updated()
-}
-
-def updated() {
-    List<String> cmds = []
-    cmds << parent.setParameter(parameterNumber = 1, size = 1, value = p1)
-    cmds << parent.setParameter(parameterNumber = 2, size = 1, value = p2)
-    cmds << parent.setParameter(parameterNumber = 3, size = 1, value = p3)
-    cmds << parent.setParameter(parameterNumber = 4, size = 1, value = p4 as Long)
-    min_dim = p5 > 99 ? 99 : p5
-    max_dim = p6 > 99 ? 99 : p6
-    cmds << parent.setParameter(parameterNumber = 5, size = 1, value = min_dim)
-    cmds << parent.setParameter(parameterNumber = 6, size = 1, value = max_dim)
-    if (!prestaging) {
-        cmds << parent.setParameter(parameterNumber = (10 + prestage_button * 8) as Integer, size = 4, value = get_dimmer_on_value(p6))
-    }
-    parent.sendCommands(delayBetween(cmds, 100))
-}
-
-def get_dimmer_on_value(Long on_level) {
-    on_level = on_level != 0 ? on_level : 255
-    return (
-        ((1 & 0xFF) << 24) |
-        ((on_level & 0xFF) << 16) |
-        ((0 & 0xFF) << 8 ) |
-        ((0 & 0xFF) << 0 )
-    )
-}
-
-private Integer scale_between_ranges(Float n, Float s_min, Float s_max, Float t_min, Float t_max) {
-    Float x = (n - s_min) / (s_max - s_min) * (t_max - t_min) + t_min
-    return x.round() as Integer
-}
-
-Integer level_raw_to_scaled(Integer level) {
-    level = level > 100 ? 100 : level
-    level = level < 0 ? 0 : level
-    return scale_between_ranges(level as Float, s_min = 0, s_max = 100, t_min = p5, t_max = p6)
-}
-
-Integer level_scaled_to_raw(Integer level) {
-    lower = p5
-    upper = p6
-    level = level < lower ? lower : level
-    level = level > upper ? upper : level
-    Integer scaledLevel = scale_between_ranges(level as Float, s_min = lower, s_max = upper, t_min = 0, t_max = 100)
-    if (logEnable) log.debug("level_scaled_to_raw: Scaled $level to $scaledLevel")
-    return scaledLevel
-}
-
-void setLevel(level, duration = p3) {
-    Integer scaledLevel = level_raw_to_scaled(level as Integer)
-    if (logEnable) log.debug "$device setLevel $level ($scaledLevel) $duration"
-    List<String> cmds = parent.childSetLevel(device, scaledLevel, duration)
-    parent.sendCommands(cmds)
-}
-
-void presetLevel(level) {
-    if (!prestaging) {
-        log.warn("Prestaging is not enabled")
-    } else {
-        if (device.currentValue("switch").toString() == "on") {
-            setLevel(level)
-        } else {
-            sendEvent(name: "level", value: level, descriptionText: levelText, type: "digital", unit: "%")
+        input "dimmerButtons", "enum", title: "Buttons that control the dimmer", options: DIMMER_BUTTONS,
+            description: "Device default: Button 1."
+        DIMMER_PARAMS.each { p ->
+            Map opts = [name: p.name, title: p.title, description: p.help]
+            if (p.options) {
+                input(opts + [type: "enum", options: p.options])
+            } else {
+                input(opts + [type: "number", range: p.range])
+            }
         }
-        Integer scaledLevel = level_raw_to_scaled(level as Integer)
-        if (txtEnable) log.info("${device.displayName} Pre-staging button $prestage_button to $level %")
-        if (logEnable) log.debug("${device.displayName} Pre-stage button $prestage_button: $level ($scaledLevel) %")
-        levelText = "${device.displayName} (${endpoint}) pre-staged to $level %"
-        state.prestaged_level = level
-        Integer parameterNumber = 10 + prestage_button * 8
-        List<String> cmds = []
-        cmds << parent.setParameter(parameterNumber = parameterNumber, size = 4, value = get_dimmer_on_value(scaledLevel))
-        parent.sendCommands(cmds)
+        input "onLevel", "number", title: "Turn-on level (%)", range: "1..99",
+            description: "Every turn-on uses this level. While it is set, presetLevel changes it; when empty, presetLevel only sets the next turn-on and the light otherwise turns on at the last level. Firmware before 1.08 only applies it when turned on from the hub."
+        input "logEnable", "bool", title: "Enable debug logging (turns off after 30 minutes)", defaultValue: false
+        input "txtEnable", "bool", title: "Enable description text logging", defaultValue: true
     }
 }
 
+/* ---------- Lifecycle ---------- */
+
+void installed() {
+    logInfo "installed"
+}
+
+void updated() {
+    logInfo "preferences saved"
+    if (logEnable) runIn(1800, "logsOff") else unschedule("logsOff")
+    migrateSettings()
+    configure()
+}
+
+void configure() {
+    ["bin", "prestaged_level"].each { state.remove(it) }
+    List<Map> params = desiredParameters()
+    // Clearing the fixed turn-on level must also clear it on the device, once.
+    if (fixedOnLevel() == null && state.fixedOnLevelSet) {
+        parent?.componentSendParameter(device, 9, 1, 0L)
+    }
+    state.fixedOnLevelSet = fixedOnLevel() != null && turnOnLevelSupported()
+    // Version 1.x pre-staging changed a button's group 4 level (parameter 18/26/34/42); restore the device default once.
+    // A group 4 setting on that button child is re-applied by the parent's sync afterwards.
+    if (state.resetPrestageParam) {
+        parent?.componentSendParameter(device, state.resetPrestageParam as Integer, 4, 0x01FF0000L)
+        state.remove("resetPrestageParam")
+    }
+    parent?.componentSetParameters(device, params)
+}
+
+void logsOff() {
+    log.warn "${device.displayName}: debug logging disabled"
+    device.updateSetting("logEnable", [value: "false", type: "bool"])
+}
+
+// Also called by the parent during its configure(); must not call back into the parent.
+List<Map> desiredParameters() {
+    List<Map> result = []
+
+    result << [num: 1, size: 1, value: toLong(setting("dimmerButtons", "p1"))] // null = no longer managed
+
+    DIMMER_PARAMS.each { p ->
+        Long value = toLong(setting(p.name, p.legacy))
+        if (value != null && p.num in [5, 6]) value = Math.max(p.num == 6 ? 1L : 0L, Math.min(value, 99L)) // 1.x allowed 100
+        result << [num: p.num, size: 1, value: value]
+    }
+
+    // Parameter 9: 129-227 = level (1-99) + 128 at every turn-on. Empty = left to presetLevel (1-99 = next turn-on only).
+    // Firmware before 1.08 stores it but ignores it; on() then sends the level itself.
+    Integer fixed = fixedOnLevel()
+    result << [num: 9, size: 1, value: fixed != null && turnOnLevelSupported() ? 128L + fixed : null]
+
+    logDebug "desired parameters: ${result}"
+    return result
+}
+
+/* ---------- Commands ---------- */
+
+// Turns on at the turn-on level or the preset level if there is one, otherwise at the last level.
 void on() {
-    if (logEnable) log.debug "$device on"
-    Integer level = device.currentValue("level") > 0 ? device.currentValue("level") : 255
-    Integer scaledLevel = level_raw_to_scaled(level as Integer)
-    List<String> cmds = parent.childSetLevel(device, level = scaledLevel, duration = p3.toInteger())
-    parent.sendCommands(cmds)
+    Integer fixed = fixedOnLevel()
+    Integer preset = toInt(state.presetLevel)
+    state.remove("presetLevel")
+    if (preset && !fixed && turnOnLevelSupported()) {
+        // Parameter 9 holds the preset: a plain on lets the device apply it, as for a button press,
+        // and the device then goes back to remembering the last level.
+        logDebug "on() at the preset level ${preset}% (parameter 9)"
+        parent?.componentOn(device)
+        return
+    }
+    Integer level = fixed ?: preset
+    if (level) {
+        logDebug "on() at ${level}%"
+        parent?.componentSetLevel(device, deviceLevel(level), onOffSeconds())
+    } else {
+        logDebug "on()"
+        parent?.componentOn(device)
+    }
 }
 
 void off() {
-    if (logEnable) log.debug "$device off"
-    List<String> cmds = parent.childSetLevel(device, level = 0, duration = p3.toInteger())
-    parent.sendCommands(cmds)
+    logDebug "off()"
+    parent?.componentOff(device)
+}
+
+void setLevel(level, duration = null) {
+    Integer l = clamp(toInt(level) ?: 0, 0, 100)
+    Integer value = deviceLevel(l)
+    logDebug "setLevel(${l}, ${duration}) -> device level ${value}"
+    parent?.componentSetLevel(device, value, duration)
 }
 
 void startLevelChange(direction) {
-    List<String> cmds = parent.childStartLevelChange(device, direction, p2.toInteger())
-    parent.sendCommands(cmds)
+    parent?.componentStartLevelChange(device, direction)
 }
 
 void stopLevelChange() {
-    List<String> cmds = parent.childStopLevelChange(device)
-    parent.sendCommands(cmds)
+    parent?.componentStopLevelChange(device)
+}
+
+// With a turn-on level set in preferences, changes it: every turn-on uses the new level until the next presetLevel.
+// Without one, sets the level for the next turn-on only (on() or a button press); setLevel in between does not use it
+// up. Either way it does not turn the light on; if the dimmer is on, it also sets the level now.
+// Firmware 1.08 or later applies it from parameter 9; older firmware ignores parameter 9, so only on() uses it there.
+void presetLevel(level) {
+    Integer l = clamp(toInt(level) ?: 0, 1, 100)
+    Integer onLevel = deviceLevel(l)
+    boolean persistent = fixedOnLevel() != null
+    String text = "${device.displayName} level was preset to ${l}%"
+    logInfo "level preset to ${l}%${persistent ? " (turn-on level)" : " (next turn-on)"}"
+    sendEvent(name: "levelPreset", value: l, unit: "%", descriptionText: text)
+
+    if (persistent) {
+        device.updateSetting("onLevel", [value: onLevel.toString(), type: "number"])
+        if (turnOnLevelSupported()) {
+            // Written straight away, and recorded as the desired value so the sync status stays right.
+            parent?.componentSendParameter(device, 9, 1, 128L + onLevel)
+            parent?.componentSetParameters(device, [[num: 9, size: 1, value: 128L + onLevel]])
+        }
+    }
+
+    if (device.currentValue("switch") == "on") {
+        setLevel(l)
+        return
+    }
+    sendEvent(name: "level", value: l, unit: "%", type: "digital", descriptionText: text)
+    if (!persistent) {
+        state.presetLevel = l
+        // 1-99 = level for the next turn-on only. Sent every time, not compared with the last value.
+        if (turnOnLevelSupported()) parent?.componentSendParameter(device, 9, 1, onLevel as Long)
+    }
 }
 
 void refresh() {
-    List<String> cmds = parent.childBasicGet(device)
-    parent.sendCommands(cmds)
+    parent?.componentRefresh(device)
+}
+
+/* ---------- Events from the parent ---------- */
+
+// Child devices receive no Z-Wave frames; the parent sends events through parse(List<Map>) below.
+void parse(String description) {
+    logDebug "parse(String) is not used: ${description}"
+}
+
+void parse(List<Map> events) {
+    events.each { Map evt ->
+        // A preset is for the next turn-on only: on() removes it itself, and a turn-on by hand uses it up here.
+        // A turn-on by setLevel (digital) leaves it for the next on().
+        if (evt.name == "switch" && evt.value == "on" && evt.type == "physical" && device.currentValue("switch") != "on") {
+            state.remove("presetLevel")
+        }
+        if (txtEnable && evt.descriptionText && device.currentValue(evt.name)?.toString() != evt.value?.toString()) {
+            log.info evt.descriptionText
+        }
+        sendEvent(evt)
+    }
+}
+
+/* ---------- Levels ---------- */
+
+// Hubitat level (0-100) -> device level (0-99). The device applies the minimum/maximum levels itself.
+private Integer deviceLevel(Integer level) {
+    return clamp(level, 0, 99)
+}
+
+// Parameter 9 (turn-on level) needs firmware 1.08 or later; 1.05 accepts it but ignores it.
+// The parent stores the firmware version on this device.
+private boolean turnOnLevelSupported() {
+    List<String> parts = (device.getDataValue("firmwareVersion") ?: "").tokenize(".")
+    Integer major = parts ? toInt(parts[0]) : null
+    Integer minor = parts.size() > 1 ? toInt(parts[1]) : 0
+    return major != null && (major > 1 || (major == 1 && (minor ?: 0) >= 8))
+}
+
+// On/off duration (parameter 3) in seconds, for turning on at a level. Device default 0.
+private Integer onOffSeconds() {
+    Integer value = toInt(setting("onOffDuration", "p3")) ?: 0
+    return value <= 127 ? value : (value - 127) * 60
+}
+
+/* ---------- Helpers ---------- */
+
+// 1-99, or null when not set. 0 (allowed by earlier 2.0 builds) counts as not set.
+private Integer fixedOnLevel() {
+    Integer v = toInt(settings.onLevel)
+    return v ? clamp(v, 1, 99) : null
+}
+
+private def setting(String name, String legacy) {
+    def value = settings[name]
+    if ((value == null || value.toString().trim() == "") && legacy) value = settings[legacy]
+    return value
+}
+
+private Integer toInt(value) {
+    Long v = toLong(value)
+    return v != null ? v.intValue() : null
+}
+
+private Long toLong(value) {
+    if (value == null || value.toString().trim() == "") return null
+    try {
+        return new BigDecimal(value.toString().trim()).longValue()
+    } catch (NumberFormatException ignored) {
+        return null
+    }
+}
+
+private Integer clamp(Integer value, Integer min, Integer max) {
+    return Math.max(min, Math.min(max, value))
+}
+
+// Moves settings from version 1.x to their new names and drops the ones that no longer exist.
+private void migrateSettings() {
+    DIMMER_PARAMS.each { p ->
+        def old = settings[p.legacy]
+        if (old == null) return
+        if (settings[p.name] == null) {
+            def value = p.num in [5, 6] ? Math.min(toInt(old) ?: 0, 99) : old
+            device.updateSetting(p.name, [value: value.toString(), type: p.options ? "enum" : "number"])
+        }
+        device.removeSetting(p.legacy)
+    }
+    if (settings.p1 != null) {
+        if (settings.dimmerButtons == null) {
+            device.updateSetting("dimmerButtons", [value: clamp(toInt(settings.p1) ?: 0, 0, 15).toString(), type: "enum"])
+        }
+        device.removeSetting("p1")
+    }
+    // 1.x pre-staging used the group 4 level of a button (parameters 18/26/34/42); presetLevel now sets the turn-on level.
+    if (settings.prestaging != null || settings.prestage_button != null) {
+        Integer button = clamp(toInt(settings.prestage_button) ?: 1, 1, 4)
+        state.resetPrestageParam = 10 + button * 8
+        logInfo "resetting the group 4 levels of button ${button} (parameter ${state.resetPrestageParam}) left by version 1.x pre-staging"
+    }
+    ["prestaging", "prestage_button", "p18", "p26", "p34", "p42", "levelScaling"].each { device.removeSetting(it) }
+}
+
+private void logDebug(String msg) {
+    if (logEnable) log.debug "${device.displayName}: ${msg}"
+}
+
+private void logInfo(String msg) {
+    if (txtEnable) log.info "${device.displayName}: ${msg}"
 }
