@@ -40,6 +40,8 @@ Each event's value is the button number, 1-4. Use the parent device for button r
 
 **Dimmer child.** It supports `on`, `off`, `setLevel` (with optional duration), `startLevelChange` and `stopLevelChange`.
 
+- `on`, `off` and `setLevel` without a duration use the on/off duration preference (parameter 3). The dimming duration (parameter 2) is used when a button is held and for `startLevelChange`.
+
 - `presetLevel` sets a level without turning the light on:
   - **Turn-on level preference set:** `presetLevel` changes the preference. Every turn-on uses the new level until the next `presetLevel`.
   - **Preference empty:** `presetLevel` applies to the next turn-on only, by `on()` or a button. After that the light turns on at its last level.
@@ -95,6 +97,7 @@ Update all three drivers together, then click **Configure** on the parent. Then 
 - **Removed commands:** `setDefaultAssociations` and `processAssociations` are replaced by **Set Association Group**, which now takes a node list per group. The non-standard `trippleTapped` event has been removed.
 - **Dimmer levels:** version 1.x also rescaled levels to the minimum/maximum range, on top of the device's own scaling. With a minimum or maximum set, the same level in a rule now comes out brighter than with 1.x. Check scenes and rules that use low levels.
 - **Debug logging** is now off by default and turns itself off after 30 minutes.
+- **Duplicate children:** children are matched on the endpoint at the end of their network ID (`-1` … `-5`), so children created under an earlier parent network ID are still used. If an earlier 2.0 build created duplicates, the oldest child of each endpoint gets the events. Configure lists the extra children in a warning, and **Remove Duplicate Children** deletes them.
 
 ## Testing
 
@@ -136,6 +139,7 @@ test/run-tests.sh          # HTML report in test/report/index.html
   - Association bookkeeping mixed strings and lists.
   - Dimmer levels were scaled twice when a minimum or maximum level was set.
   - In the default LED-only mode, turning a button child off read back the button's own state and flipped the switch back on.
+  - Configure created duplicate children when the parent's network ID had changed since they were created.
 - Supervision reports are now sent immediately instead of from a scheduled job.
 - `pushed` comes from Central Scene when the device sends it for single presses, detected automatically.
 - A dimmer change from a button pressed within a few seconds of a hub command is now reported as `physical`.

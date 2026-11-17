@@ -11,9 +11,9 @@ import groovy.transform.Field
 // legacy: setting name used by version 1.x.
 @Field static final List<Map> DIMMER_PARAMS = [
     [num: 2, name: "dimDuration", legacy: "p2", size: 1, title: "Dimming duration, 0-100%", range: "0..255",
-     help: "Used when a button is held and for level changes without a duration. 0 = instant, 1-127 = seconds, 128-255 = 1-128 minutes. Device default 5."],
+     help: "Used when a button is held. 0 = instant, 1-127 = seconds, 128-255 = 1-128 minutes. Device default 5."],
     [num: 3, name: "onOffDuration", legacy: "p3", size: 1, title: "On/off duration", range: "0..255",
-     help: "Used for on/off. 0 = instant, 1-127 = seconds, 128-255 = 1-128 minutes. Device default 0."],
+     help: "Used for on, off and setLevel without a duration. 0 = instant, 1-127 = seconds, 128-255 = 1-128 minutes. Device default 0."],
     [num: 4, name: "dimmingMode", legacy: "p4", size: 1, title: "Dimming mode",
      options: [0: "No dimming (on/off only)", 1: "Trailing edge (LED, electronic transformers)", 2: "Leading edge (iron-core transformers)"],
      help: "Device default: Trailing edge. Iron-core transformers must use leading edge, or the dimmer can be damaged."],
@@ -117,6 +117,8 @@ List<Map> desiredParameters() {
 
 /* ---------- Commands ---------- */
 
+// Without a duration, on, off and setLevel use the on/off duration preference (parameter 3).
+
 // Turns on at the turn-on level or the preset level if there is one, otherwise at the last level.
 void on() {
     Integer fixed = fixedOnLevel()
@@ -126,7 +128,7 @@ void on() {
         // Parameter 9 holds the preset: a plain on lets the device apply it, as for a button press,
         // and the device then goes back to remembering the last level.
         logDebug "on() at the preset level ${preset}% (parameter 9)"
-        parent?.componentOn(device)
+        parent?.componentOn(device, onOffSeconds())
         return
     }
     Integer level = fixed ?: preset
@@ -135,20 +137,21 @@ void on() {
         parent?.componentSetLevel(device, deviceLevel(level), onOffSeconds())
     } else {
         logDebug "on()"
-        parent?.componentOn(device)
+        parent?.componentOn(device, onOffSeconds())
     }
 }
 
 void off() {
     logDebug "off()"
-    parent?.componentOff(device)
+    parent?.componentOff(device, onOffSeconds())
 }
 
 void setLevel(level, duration = null) {
     Integer l = clamp(toInt(level) ?: 0, 0, 100)
     Integer value = deviceLevel(l)
-    logDebug "setLevel(${l}, ${duration}) -> device level ${value}"
-    parent?.componentSetLevel(device, value, duration)
+    def secs = duration != null && duration.toString().trim() != "" ? duration : onOffSeconds()
+    logDebug "setLevel(${l}, ${duration}) -> device level ${value}, ${secs} s"
+    parent?.componentSetLevel(device, value, secs)
 }
 
 void startLevelChange(direction) {
@@ -233,9 +236,12 @@ private boolean turnOnLevelSupported() {
     return major != null && (major > 1 || (major == 1 && (minor ?: 0) >= 8))
 }
 
-// On/off duration (parameter 3) in seconds, for turning on at a level. Device default 0.
+// On/off duration preference (parameter 3) in seconds, or null when not set: the parent then uses the device's own
+// parameter 3.
 private Integer onOffSeconds() {
-    Integer value = toInt(setting("onOffDuration", "p3")) ?: 0
+    Integer value = toInt(setting("onOffDuration", "p3"))
+    if (value == null) return null
+    value = clamp(value, 0, 255)
     return value <= 127 ? value : (value - 127) * 60
 }
 

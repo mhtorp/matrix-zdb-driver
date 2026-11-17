@@ -62,6 +62,7 @@ class MatrixZdbSpec extends Specification {
     List<String> scheduled = []
     List<String> logs = []
     List<Map> created = []
+    List<String> deletedChildren = []
     Map<Integer, Map> kids = [:]
 
     // ---------- harness ----------
@@ -137,9 +138,9 @@ class MatrixZdbSpec extends Specification {
     /** The child device as both the parent and the child driver see it. */
     private ChildDeviceWrapper childWrapper(int ep, Map kid) {
         GroovyMock(ChildDeviceWrapper) {
-            _ * getDeviceNetworkId() >> "2A-${ep}".toString()
+            _ * getDeviceNetworkId() >> { kid.dni ?: "2A-${ep}".toString() }
             _ * getDisplayName() >> kid.name
-            _ * getId() >> "${100 + ep}".toString()
+            _ * getId() >> { kid.id ?: "${100 + ep}".toString() }
             _ * currentValue(_ as String) >> { String n -> kid.attrs[n] }
             _ * currentValue(_ as String, _) >> { String n, b -> kid.attrs[n] }
             _ * parse(_ as List) >> { args -> kid.script.parse(args[0]) } // one untyped parameter = the argument list
@@ -213,6 +214,10 @@ class MatrixZdbSpec extends Specification {
             updateDataValue(_ as String, _ as String) >> { String n, String v -> parentData[n] = v }
             getChildDevice(_ as String) >> { String dni -> kids.values().find { it.exists && it.wrapper.deviceNetworkId == dni }?.wrapper }
             getChildDevices() >> { kids.values().findAll { it.exists }*.wrapper }
+            deleteChildDevice(_ as String) >> { String dni ->
+                deletedChildren << dni
+                kids.values().find { it.exists && it.wrapper.deviceNetworkId == dni }?.exists = false
+            }
             addChildDevice(_ as String, _ as String, _ as String, _ as Map) >> { String ns, String type, String dni, Map props ->
                 created << [ns: ns, type: type, dni: dni, props: props]
                 Map kid = kids[dni.split("-")[-1] as Integer]
@@ -296,6 +301,48 @@ class MatrixZdbSpec extends Specification {
         parentAttrs.numberOfButtons == 4
         parentAttrs.syncStatus == "2 pending"
         parentData.driverVersion == "2.0.0"
+    }
+
+    def "children created under an earlier parent network ID are found by endpoint, so configure creates none"() {
+        given:
+        load()
+        (1..5).each { kids[it].dni = "1F-${it}".toString() }
+
+        when:
+        parent.configure()
+        fromEndpoint(5, report(SwitchMultilevelReport, [value: (short) 40]))
+        fromEndpoint(2, report(BasicReport, [value: (short) 0xFF]))
+
+        then:
+        created.isEmpty()
+        kids[5].attrs.level == 40
+        kids[2].attrs.switch == "on"
+    }
+
+    def "with duplicate children the oldest gets the events, and removeDuplicateChildren deletes the others"() {
+        given:
+        load()
+        kids[1].dni = "1F-1"
+        kids[11] = [name: "Button 1 copy", state: [:], attrs: [:], events: [], settingUpdates: [:], removed: [], data: [:],
+                    exists: true, dni: "2A-1", id: "301"]
+        kids[11].wrapper = childWrapper(1, kids[11])
+        loadChild(11, [:])
+
+        when:
+        fromEndpoint(1, report(BasicReport, [value: (short) 0xFF]))
+        parent.configure()
+        then:
+        kids[1].attrs.switch == "on"
+        kids[11].events.isEmpty()
+        created.isEmpty()
+        logs.any { it.startsWith("warn:") && it.contains("Button 1 copy") && it.contains("Remove Duplicate Children") }
+
+        when:
+        parent.removeDuplicateChildren()
+        then:
+        deletedChildren == ["2A-1"]
+        !kids[11].exists
+        kids[1].exists
     }
 
     def "configure writes every desired parameter again, even if the cache says it is set"() {
@@ -580,13 +627,44 @@ class MatrixZdbSpec extends Specification {
         kids[5].script.off()
 
         then:
-        hubCommands == ["EP5>SwitchMultilevelSet[dimmingDuration:255, value:99]",
-                        "EP5>SwitchMultilevelSet[dimmingDuration:255, value:0]",
+        hubCommands == ["EP5>SwitchMultilevelSet[dimmingDuration:0, value:99]", // on/off duration (unknown = 0)
+                        "EP5>SwitchMultilevelSet[dimmingDuration:0, value:0]",
                         "EP5>SwitchMultilevelSet[dimmingDuration:5, value:40]",
                         "EP5>SwitchMultilevelSet[dimmingDuration:132, value:40]", // 0x7F + 5 minutes
                         "EP5>SwitchMultilevelSet[dimmingDuration:255, value:255]",
                         "EP5>SwitchMultilevelSet[dimmingDuration:255, value:0]"]
         scheduled.count { it == "pollDimmer" } == 6
+    }
+
+    def "on, off and setLevel without a duration use the on/off duration preference"() {
+        given:
+        load([:], [5: [onOffDuration: 130, dimDuration: 7]]) // 130 = 3 minutes
+
+        when:
+        kids[5].script.on()
+        kids[5].script.off()
+        kids[5].script.setLevel(40)
+        kids[5].script.setLevel(40, 5)
+
+        then:
+        hubCommands == ["EP5>SwitchMultilevelSet[dimmingDuration:130, value:255]", // 0x7F + 3 minutes
+                        "EP5>SwitchMultilevelSet[dimmingDuration:130, value:0]",
+                        "EP5>SwitchMultilevelSet[dimmingDuration:130, value:40]",
+                        "EP5>SwitchMultilevelSet[dimmingDuration:5, value:40]"]
+    }
+
+    def "without the preference, setLevel uses the device's on/off duration"() {
+        given:
+        load()
+        parentState.deviceConfig = ["2": 7, "3": 10]
+
+        when:
+        kids[5].script.setLevel(40)
+        kids[5].script.on()
+
+        then:
+        hubCommands == ["EP5>SwitchMultilevelSet[dimmingDuration:10, value:40]",
+                        "EP5>SwitchMultilevelSet[dimmingDuration:255, value:255]"] // the device uses parameter 3
     }
 
     def "dimmer level change uses typed Switch Multilevel v4 commands"() {
@@ -628,7 +706,7 @@ class MatrixZdbSpec extends Specification {
     def "a button press during the digital window makes the following reports physical (seen on firmware 1.09)"() {
         given:
         load()
-        kids[5].script.setLevel(50) // window: dimming duration (unknown = 0) + 3 s
+        kids[5].script.setLevel(50) // window: on/off duration (unknown = 0) + 3 s
         fromEndpoint(5, report(SwitchMultilevelReport, [value: (short) 50]))
         clock += 1_000
 
@@ -657,7 +735,7 @@ class MatrixZdbSpec extends Specification {
         fromEndpoint(5, report(SwitchMultilevelReport, [value: (short) 1]))
 
         then: "as logged by firmware 1.05: setLevel 1 is reported back as 1"
-        hubCommands[0] == "EP5>SwitchMultilevelSet[dimmingDuration:255, value:1]"
+        hubCommands[0] == "EP5>SwitchMultilevelSet[dimmingDuration:0, value:1]"
         kids[5].attrs.level == 1
     }
 
@@ -691,12 +769,12 @@ class MatrixZdbSpec extends Specification {
         kids[5].script.on()
         kids[5].script.on()
         then:
-        hubCommands == [firstOn, "EP5>SwitchMultilevelSet[dimmingDuration:255, value:255]"]
+        hubCommands == [firstOn, "EP5>SwitchMultilevelSet[dimmingDuration:3, value:255]"]
         kids[5].state.presetLevel == null
 
         where:
         fw     | presetWrite        | firstOn
-        "1.09" | [set(9, 50, 1)]    | "EP5>SwitchMultilevelSet[dimmingDuration:255, value:255]" // the device applies parameter 9
+        "1.09" | [set(9, 50, 1)]    | "EP5>SwitchMultilevelSet[dimmingDuration:3, value:255]"   // the device applies parameter 9
         "1.05" | []                 | "EP5>SwitchMultilevelSet[dimmingDuration:3, value:50]"    // 1.05 ignores parameter 9
     }
 
@@ -752,7 +830,7 @@ class MatrixZdbSpec extends Specification {
         then:
         configSets().isEmpty()
         hubCommands.findAll { it.startsWith("EP5>SwitchMultilevelSet") } ==
-            ["EP5>SwitchMultilevelSet[dimmingDuration:255, value:70]", "EP5>SwitchMultilevelSet[dimmingDuration:255, value:0]",
+            ["EP5>SwitchMultilevelSet[dimmingDuration:0, value:70]", "EP5>SwitchMultilevelSet[dimmingDuration:255, value:0]",
              "EP5>SwitchMultilevelSet[dimmingDuration:0, value:30]", "EP5>SwitchMultilevelSet[dimmingDuration:255, value:0]",
              "EP5>SwitchMultilevelSet[dimmingDuration:0, value:30]"]
     }
@@ -771,9 +849,9 @@ class MatrixZdbSpec extends Specification {
 
         where:
         prefs         | expected
-        [:]           | ["EP5>SwitchMultilevelSet[dimmingDuration:255, value:60]"]
+        [:]           | ["EP5>SwitchMultilevelSet[dimmingDuration:0, value:60]"]
         [onLevel: 50] | [set(9, 188 - 256, 1), "delay 400", "ConfigurationGet[parameterNumber:9]",
-                         "EP5>SwitchMultilevelSet[dimmingDuration:255, value:60]"]
+                         "EP5>SwitchMultilevelSet[dimmingDuration:0, value:60]"]
     }
 
     def "a fixed turn-on level of 0 counts as not set"() {

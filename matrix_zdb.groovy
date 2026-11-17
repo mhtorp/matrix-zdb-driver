@@ -85,6 +85,7 @@ metadata {
             [name: "Nodes", type: "STRING", description: "Comma-separated node IDs in hex, NODE-EP for an endpoint (e.g. 1A, 2B-5). Empty clears the group."]
         ]
         command "repairLifeline"
+        command "removeDuplicateChildren"
 
         attribute "syncStatus", "string"
 
@@ -143,13 +144,14 @@ void configure() {
     cleanupLegacyState()
     initialize()
     createChildDevices()
+    warnDuplicateChildren()
     state.remove("singlePressScenes") // detected again on the next press, in case the firmware changed
     String fw = device.getDataValue("firmwareVersion")
     if (fw) shareFirmwareVersion(fw)
 
     state.remove("deviceConfig") // forget cached values so every desired parameter is written and read back
     storeDesired(deviceParameters())
-    childDevices.each { cd ->
+    primaryChildren().each { cd ->
         try {
             storeDesired(cd.desiredParameters() as List<Map>)
         } catch (Exception ignored) {
@@ -233,6 +235,20 @@ void repairLifeline() {
     ])
 }
 
+// Deletes all but the oldest child of each endpoint (see childrenFor). Children with apps or rules are normally the
+// oldest; check the warning from Configure, which lists the children this removes.
+void removeDuplicateChildren() {
+    List extra = duplicateChildren()
+    if (!extra) {
+        logInfo "no duplicate children"
+        return
+    }
+    extra.each { cd ->
+        log.warn "${device.displayName}: removing duplicate child ${cd.displayName} (${cd.deviceNetworkId})"
+        deleteChildDevice(cd.deviceNetworkId)
+    }
+}
+
 void push(button)      { buttonEvent(toInt(button), "pushed", "digital") }
 void hold(button)      { buttonEvent(toInt(button), "held", "digital") }
 void release(button)   { buttonEvent(toInt(button), "released", "digital") }
@@ -248,30 +264,33 @@ void pollDimmer() {
 
 /* ---------- Component API (called by child devices) ---------- */
 
-void componentOn(cd) {
+// transitionTime (dimmer only): seconds, or null for the device's on/off duration (parameter 3).
+void componentOn(cd, transitionTime = null) {
     Integer ep = endpointOf(cd)
-    logDebug "componentOn(${ep})"
+    logDebug "componentOn(${ep}, ${transitionTime})"
     if (ep == DIMMER_EP) {
-        dimmerSet(0xFF, null) // 0xFF: restore the last level (or the level from parameter 9)
+        dimmerSet(0xFF, durationSeconds(transitionTime)) // 0xFF: restore the last level (or the level from parameter 9)
     } else {
         buttonSwitch(ep, 0xFF)
     }
 }
 
-void componentOff(cd) {
+void componentOff(cd, transitionTime = null) {
     Integer ep = endpointOf(cd)
-    logDebug "componentOff(${ep})"
+    logDebug "componentOff(${ep}, ${transitionTime})"
     if (ep == DIMMER_EP) {
-        dimmerSet(0, null)
+        dimmerSet(0, durationSeconds(transitionTime))
     } else {
         buttonSwitch(ep, 0)
     }
 }
 
+// Without a transitionTime, a level change uses the on/off duration (parameter 3), as on and off do.
 void componentSetLevel(cd, level, transitionTime = null) {
     if (!isDimmer(cd, "setLevel")) return
     Integer value = clamp(toInt(level) ?: 0, 0, 99) // the device's maximum is 99
-    Integer secs = transitionTime != null ? Math.max(0, toInt(transitionTime) ?: 0) : null
+    Integer secs = durationSeconds(transitionTime)
+    if (secs == null) secs = decodeDuration(paramValue(3) ?: 0)
     logDebug "componentSetLevel(${value}, ${secs})"
     dimmerSet(value, secs)
 }
@@ -483,7 +502,7 @@ void zwaveEvent(hubitat.zwave.commands.versionv1.VersionReport cmd, Integer ep) 
     if (fw != previous) {
         // How single presses are reported may change, and parameter 9 needs 1.08: detect and apply again.
         state.remove("singlePressScenes")
-        childDevices.each { cd ->
+        primaryChildren().each { cd ->
             try {
                 cd.configure()
             } catch (Exception ignored) {
@@ -635,8 +654,8 @@ private void createChildDevices() {
 }
 
 private void addChildIfMissing(Integer ep, String driver, String label) {
+    if (childrenFor(ep)) return
     String dni = "${device.deviceNetworkId}-${ep}"
-    if (getChildDevice(dni)) return
     try {
         addChildDevice("mhtorp", driver, dni, [name: "Matrix ZDB 5100 ${label}", label: "${device.displayName} ${label}", isComponent: true])
         logInfo "created ${label}"
@@ -645,12 +664,39 @@ private void addChildIfMissing(Integer ep, String driver, String label) {
     }
 }
 
-private def childFor(Integer ep) {
-    return getChildDevice("${device.deviceNetworkId}-${ep}")
+// A child keeps its network ID when the parent's changes (re-inclusion, hub migration), so children are matched on
+// the endpoint suffix only, as version 1.x did. The oldest comes first.
+private List childrenFor(Integer ep) {
+    return (childDevices ?: []).findAll { endpointOf(it) == ep }.sort { toLong(it.id) ?: Long.MAX_VALUE }
 }
 
+// The child that gets the endpoint's events: the oldest if there are duplicates.
+private def childFor(Integer ep) {
+    List found = childrenFor(ep)
+    return found ? found[0] : null
+}
+
+private List primaryChildren() {
+    return (BUTTON_EPS + [DIMMER_EP]).collect { childFor(it) }.findAll { it != null }
+}
+
+private List duplicateChildren() {
+    return (BUTTON_EPS + [DIMMER_EP]).collectMany { childrenFor(it).drop(1) }
+}
+
+private void warnDuplicateChildren() {
+    List extra = duplicateChildren()
+    if (extra) {
+        String names = extra.collect { "${it.displayName} (${it.deviceNetworkId})" }.join(", ")
+        log.warn "${device.displayName}: ${names} duplicate older children of the same endpoints " +
+            "and get no events. Run 'Remove Duplicate Children' to delete them."
+    }
+}
+
+// "<parent network ID>-<endpoint>"; null if the ID has no endpoint suffix.
 private Integer endpointOf(cd) {
-    return cd.deviceNetworkId.split("-")[-1] as Integer
+    def m = (cd.deviceNetworkId ?: "") =~ /-(\d+)$/
+    return m.find() ? (m.group(1) as Integer) : null
 }
 
 private boolean isDimmer(cd, String command) {
@@ -760,6 +806,12 @@ private boolean isRetransmission(Map<String, List> seen, String id) {
 
 private String deviceKey(Integer ep) {
     return "${device.id}:${ep}".toString()
+}
+
+// Seconds (0 or more), or null when not given.
+private Integer durationSeconds(transitionTime) {
+    Integer secs = toInt(transitionTime)
+    return secs != null ? Math.max(0, secs) : null
 }
 
 // Z-Wave duration: 0-127 = seconds, 0x80-0xFE = 1-127 minutes.
