@@ -55,14 +55,10 @@ class MatrixZdbSpec extends Specification {
     Map parentAttrs = [:]
     List<Map> parentEvents = []
     Map parentData = [:]
-    Map parentSettingUpdates = [:]
-    List<String> parentRemoved = []
-    List<String> deletedAttrs = []
     List<String> hubCommands = []
     List<String> scheduled = []
     List<String> logs = []
     List<Map> created = []
-    List<String> deletedChildren = []
     Map<Integer, Map> kids = [:]
 
     // ---------- harness ----------
@@ -151,7 +147,6 @@ class MatrixZdbSpec extends Specification {
             _ * updateDataValue(_ as String, _ as String) >> { String n, String v -> kid.data[n] = v }
             // Like the hub, later calls see the new value.
             _ * updateSetting(_ as String, _) >> { String n, v -> kid.settingUpdates[n] = v; kid.settingValues?.put(n, v instanceof Map ? v.value : v) }
-            _ * removeSetting(_ as String) >> { String n -> kid.removed << n; kid.settingValues?.put(n, null) }
         }
     }
 
@@ -180,7 +175,7 @@ class MatrixZdbSpec extends Specification {
     private void load(Map settings = [:], Map<Integer, Map> childSettings = [:], boolean withChildren = true) {
         (1..5).each { ep ->
             Map kid = [name: ep == 5 ? "Dimmer" : "Button ${ep}".toString(), state: [:], attrs: [:], events: [],
-                       settingUpdates: [:], removed: [], data: [:], exists: withChildren]
+                       settingUpdates: [:], data: [:], exists: withChildren]
             kid.wrapper = childWrapper(ep, kid)
             kids[ep] = kid
         }
@@ -193,9 +188,7 @@ class MatrixZdbSpec extends Specification {
             _ * getDataValue(_ as String) >> { String n -> parentData[n] }
             _ * currentValue(_ as String) >> { String n -> parentAttrs[n] }
             _ * currentValue(_ as String, _) >> { String n, b -> parentAttrs[n] }
-            _ * deleteCurrentState(_ as String) >> { String n -> deletedAttrs << n }
-            _ * updateSetting(_ as String, _) >> { String n, v -> parentSettingUpdates[n] = v }
-            _ * removeSetting(_ as String) >> { String n -> parentRemoved << n }
+            _ * updateSetting(_ as String, _) >> { String n, v -> }
         }
         DeviceExecutor api = Stub(DeviceExecutor) {
             getState() >> parentState
@@ -214,10 +207,6 @@ class MatrixZdbSpec extends Specification {
             updateDataValue(_ as String, _ as String) >> { String n, String v -> parentData[n] = v }
             getChildDevice(_ as String) >> { String dni -> kids.values().find { it.exists && it.wrapper.deviceNetworkId == dni }?.wrapper }
             getChildDevices() >> { kids.values().findAll { it.exists }*.wrapper }
-            deleteChildDevice(_ as String) >> { String dni ->
-                deletedChildren << dni
-                kids.values().find { it.exists && it.wrapper.deviceNetworkId == dni }?.exists = false
-            }
             addChildDevice(_ as String, _ as String, _ as String, _ as Map) >> { String ns, String type, String dni, Map props ->
                 created << [ns: ns, type: type, dni: dni, props: props]
                 Map kid = kids[dni.split("-")[-1] as Integer]
@@ -319,32 +308,6 @@ class MatrixZdbSpec extends Specification {
         kids[2].attrs.switch == "on"
     }
 
-    def "with duplicate children the oldest gets the events, and removeDuplicateChildren deletes the others"() {
-        given:
-        load()
-        kids[1].dni = "1F-1"
-        kids[11] = [name: "Button 1 copy", state: [:], attrs: [:], events: [], settingUpdates: [:], removed: [], data: [:],
-                    exists: true, dni: "2A-1", id: "301"]
-        kids[11].wrapper = childWrapper(1, kids[11])
-        loadChild(11, [:])
-
-        when:
-        fromEndpoint(1, report(BasicReport, [value: (short) 0xFF]))
-        parent.configure()
-        then:
-        kids[1].attrs.switch == "on"
-        kids[11].events.isEmpty()
-        created.isEmpty()
-        logs.any { it.startsWith("warn:") && it.contains("Button 1 copy") && it.contains("Remove Duplicate Children") }
-
-        when:
-        parent.removeDuplicateChildren()
-        then:
-        deletedChildren == ["2A-1"]
-        !kids[11].exists
-        kids[1].exists
-    }
-
     def "configure writes every desired parameter again, even if the cache says it is set"() {
         given:
         load()
@@ -356,19 +319,6 @@ class MatrixZdbSpec extends Specification {
         then:
         configSets() == [set(10, 1, 1), set(14, 0xFF555500L - (1L << 32), 4)]
         created.isEmpty()
-    }
-
-    def "configure removes state left by version 1.x"() {
-        given:
-        load()
-        parentState.putAll(["1": 0, bin: 3, defaultG1: ["01-0"], desiredAssociation2: "05", actualAssociation14: [], associationGroups: 14])
-
-        when:
-        parent.configure()
-
-        then:
-        !parentState.keySet().any { it in ["1", "bin", "defaultG1", "desiredAssociation2", "actualAssociation14", "associationGroups"] }
-        deletedAttrs.contains("groups")
     }
 
     // ---------- buttons ----------
@@ -981,56 +931,6 @@ class MatrixZdbSpec extends Specification {
 
         then:
         hubCommands.findAll { it.startsWith("ConfigurationGet") }.size() == 47
-    }
-
-    // ---------- migration from 1.x ----------
-
-    def "button settings from 1.x are moved to their new names and still applied"() {
-        given:
-        load([:], [1: [p16: "1", p17: 600, p19: "2", p20: "5"]])
-
-        when:
-        kids[1].script.updated()
-        parent.syncParameters()
-
-        then:
-        kids[1].settingUpdates.buttonMode == [value: "1", type: "enum"]
-        kids[1].settingUpdates.timerDuration == [value: "600", type: "number"]
-        kids[1].removed.containsAll(["p16", "p17", "p19", "p20"])
-        configSets() == [set(16, 1, 1), set(17, 600, 2), set(19, 2, 1), set(20, 5, 1)]
-    }
-
-    def "dimmer settings from 1.x are migrated and the pre-staging parameter is reset"() {
-        given:
-        load([:], [5: [p1: 5, p5: 10, p6: 100, prestaging: true, prestage_button: 2]])
-
-        when:
-        kids[5].script.updated()
-        then: "the group 4 levels of button 2 (parameter 26) go back to the device default straight away"
-        configSets() == [set(26, 0x01FF0000L, 4)]
-        kids[5].settingUpdates.dimmerButtons == [value: "5", type: "enum"]
-        kids[5].settingUpdates.maxLevel == [value: "99", type: "number"]
-        kids[5].removed.containsAll(["p1", "p5", "p6", "prestaging", "prestage_button"])
-        !kids[5].state.containsKey("resetPrestageParam")
-
-        when:
-        hubCommands.clear()
-        parent.syncParameters()
-        then:
-        configSets() == [set(1, 5, 1), set(5, 10, 1), set(6, 99, 1)]
-    }
-
-    def "parent setting enhancedLedControl from 1.x becomes parameter 10"() {
-        given:
-        load([enhancedLedControl: false])
-
-        when:
-        parent.updated()
-
-        then:
-        parentSettingUpdates.configParam10 == [value: "0", type: "enum"]
-        parentRemoved.contains("enhancedLedControl")
-        configSets().contains(set(10, 0, 1))
     }
 
     // ---------- associations ----------

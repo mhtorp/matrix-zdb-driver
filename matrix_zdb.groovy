@@ -85,7 +85,6 @@ metadata {
             [name: "Nodes", type: "STRING", description: "Comma-separated node IDs in hex, NODE-EP for an endpoint (e.g. 1A, 2B-5). Empty clears the group."]
         ]
         command "repairLifeline"
-        command "removeDuplicateChildren"
 
         attribute "syncStatus", "string"
 
@@ -125,7 +124,6 @@ void installed() {
 void updated() {
     logInfo "preferences saved"
     if (logEnable) runIn(1800, "logsOff") else unschedule("logsOff")
-    migrateSettings()
     initialize()
     storeDesired(deviceParameters())
     syncParameters()
@@ -140,18 +138,15 @@ void initialize() {
 void configure() {
     logInfo "configure"
     if (logEnable) runIn(1800, "logsOff")
-    migrateSettings()
-    cleanupLegacyState()
     initialize()
     createChildDevices()
-    warnDuplicateChildren()
     state.remove("singlePressScenes") // detected again on the next press, in case the firmware changed
     String fw = device.getDataValue("firmwareVersion")
     if (fw) shareFirmwareVersion(fw)
 
     state.remove("deviceConfig") // forget cached values so every desired parameter is written and read back
     storeDesired(deviceParameters())
-    primaryChildren().each { cd ->
+    childDevices.each { cd ->
         try {
             storeDesired(cd.desiredParameters() as List<Map>)
         } catch (Exception ignored) {
@@ -233,20 +228,6 @@ void repairLifeline() {
         zwave.multiChannelAssociationV2.multiChannelAssociationSet(groupingIdentifier: 1, multiChannelNodeIds: [[nodeId: zwaveHubNodeId, bitAddress: 0, endPointId: 0]]),
         zwave.multiChannelAssociationV2.multiChannelAssociationGet(groupingIdentifier: 1)
     ])
-}
-
-// Deletes all but the oldest child of each endpoint (see childrenFor). Children with apps or rules are normally the
-// oldest; check the warning from Configure, which lists the children this removes.
-void removeDuplicateChildren() {
-    List extra = duplicateChildren()
-    if (!extra) {
-        logInfo "no duplicate children"
-        return
-    }
-    extra.each { cd ->
-        log.warn "${device.displayName}: removing duplicate child ${cd.displayName} (${cd.deviceNetworkId})"
-        deleteChildDevice(cd.deviceNetworkId)
-    }
 }
 
 void push(button)      { buttonEvent(toInt(button), "pushed", "digital") }
@@ -502,7 +483,7 @@ void zwaveEvent(hubitat.zwave.commands.versionv1.VersionReport cmd, Integer ep) 
     if (fw != previous) {
         // How single presses are reported may change, and parameter 9 needs 1.08: detect and apply again.
         state.remove("singlePressScenes")
-        primaryChildren().each { cd ->
+        childDevices.each { cd ->
             try {
                 cd.configure()
             } catch (Exception ignored) {
@@ -584,7 +565,7 @@ private List<Map> deviceParameters() {
     List<Map> result = []
     PARAMS.each { p ->
         def raw = settings["configParam${p.num}".toString()]
-        if (raw == null || raw.toString().trim() == "") raw = legacySetting(p.num) ?: p.defaultValue
+        if (raw == null || raw.toString().trim() == "") raw = p.defaultValue
         Long value = p.color ? colorToParam(raw?.toString()) : toLong(raw)
         result << [num: p.num, size: p.size, value: value] // null = no longer managed
     }
@@ -654,7 +635,7 @@ private void createChildDevices() {
 }
 
 private void addChildIfMissing(Integer ep, String driver, String label) {
-    if (childrenFor(ep)) return
+    if (childFor(ep)) return
     String dni = "${device.deviceNetworkId}-${ep}"
     try {
         addChildDevice("mhtorp", driver, dni, [name: "Matrix ZDB 5100 ${label}", label: "${device.displayName} ${label}", isComponent: true])
@@ -665,32 +646,9 @@ private void addChildIfMissing(Integer ep, String driver, String label) {
 }
 
 // A child keeps its network ID when the parent's changes (re-inclusion, hub migration), so children are matched on
-// the endpoint suffix only, as version 1.x did. The oldest comes first.
-private List childrenFor(Integer ep) {
-    return (childDevices ?: []).findAll { endpointOf(it) == ep }.sort { toLong(it.id) ?: Long.MAX_VALUE }
-}
-
-// The child that gets the endpoint's events: the oldest if there are duplicates.
+// the endpoint suffix only, as version 1.x did.
 private def childFor(Integer ep) {
-    List found = childrenFor(ep)
-    return found ? found[0] : null
-}
-
-private List primaryChildren() {
-    return (BUTTON_EPS + [DIMMER_EP]).collect { childFor(it) }.findAll { it != null }
-}
-
-private List duplicateChildren() {
-    return (BUTTON_EPS + [DIMMER_EP]).collectMany { childrenFor(it).drop(1) }
-}
-
-private void warnDuplicateChildren() {
-    List extra = duplicateChildren()
-    if (extra) {
-        String names = extra.collect { "${it.displayName} (${it.deviceNetworkId})" }.join(", ")
-        log.warn "${device.displayName}: ${names} duplicate older children of the same endpoints " +
-            "and get no events. Run 'Remove Duplicate Children' to delete them."
-    }
+    return (childDevices ?: []).find { endpointOf(it) == ep }
 }
 
 // "<parent network ID>-<endpoint>"; null if the ID has no endpoint suffix.
@@ -918,28 +876,6 @@ private Long toLong(value) {
 
 private Integer clamp(Integer value, Integer min, Integer max) {
     return Math.max(min, Math.min(max, value))
-}
-
-/* ---------- Migration from 1.x ---------- */
-
-private def legacySetting(Integer num) {
-    if (num == 10 && settings.enhancedLedControl != null) return settings.enhancedLedControl ? "1" : "0"
-    return null
-}
-
-private void migrateSettings() {
-    if (settings.enhancedLedControl != null) {
-        if (settings.configParam10 == null) device.updateSetting("configParam10", [value: settings.enhancedLedControl ? "1" : "0", type: "enum"])
-        device.removeSetting("enhancedLedControl")
-    }
-}
-
-// Removes state and attributes left behind by version 1.x.
-private void cleanupLegacyState() {
-    List<String> keys = ["1", "2", "3", "4", "bin", "associationGroups", "defaultG1", "defaultG2", "defaultG3"]
-    (1..14).each { keys << "desiredAssociation${it}".toString(); keys << "actualAssociation${it}".toString() }
-    keys.each { state.remove(it) }
-    device.deleteCurrentState("groups")
 }
 
 /* ---------- Logging ---------- */

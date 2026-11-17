@@ -8,18 +8,17 @@
 
 import groovy.transform.Field
 
-// legacy: setting name used by version 1.x.
 @Field static final List<Map> DIMMER_PARAMS = [
-    [num: 2, name: "dimDuration", legacy: "p2", size: 1, title: "Dimming duration, 0-100%", range: "0..255",
+    [num: 2, name: "dimDuration", size: 1, title: "Dimming duration, 0-100%", range: "0..255",
      help: "Used when a button is held. 0 = instant, 1-127 = seconds, 128-255 = 1-128 minutes. Device default 5."],
-    [num: 3, name: "onOffDuration", legacy: "p3", size: 1, title: "On/off duration", range: "0..255",
+    [num: 3, name: "onOffDuration", size: 1, title: "On/off duration", range: "0..255",
      help: "Used for on, off and setLevel without a duration. 0 = instant, 1-127 = seconds, 128-255 = 1-128 minutes. Device default 0."],
-    [num: 4, name: "dimmingMode", legacy: "p4", size: 1, title: "Dimming mode",
+    [num: 4, name: "dimmingMode", size: 1, title: "Dimming mode",
      options: [0: "No dimming (on/off only)", 1: "Trailing edge (LED, electronic transformers)", 2: "Leading edge (iron-core transformers)"],
      help: "Device default: Trailing edge. Iron-core transformers must use leading edge, or the dimmer can be damaged."],
-    [num: 5, name: "minLevel", legacy: "p5", size: 1, title: "Minimum level (%)", range: "0..99",
+    [num: 5, name: "minLevel", size: 1, title: "Minimum level (%)", range: "0..99",
      help: "Actual output at the lowest level; the device spreads 1-99% over the minimum-maximum range. Device default 0."],
-    [num: 6, name: "maxLevel", legacy: "p6", size: 1, title: "Maximum level (%)", range: "1..99",
+    [num: 6, name: "maxLevel", size: 1, title: "Maximum level (%)", range: "1..99",
      help: "Actual output at 99%. Device default 99."]
 ]
 
@@ -68,24 +67,16 @@ void installed() {
 void updated() {
     logInfo "preferences saved"
     if (logEnable) runIn(1800, "logsOff") else unschedule("logsOff")
-    migrateSettings()
     configure()
 }
 
 void configure() {
-    ["bin", "prestaged_level"].each { state.remove(it) }
     List<Map> params = desiredParameters()
     // Clearing the fixed turn-on level must also clear it on the device, once.
     if (fixedOnLevel() == null && state.fixedOnLevelSet) {
         parent?.componentSendParameter(device, 9, 1, 0L)
     }
     state.fixedOnLevelSet = fixedOnLevel() != null && turnOnLevelSupported()
-    // Version 1.x pre-staging changed a button's group 4 level (parameter 18/26/34/42); restore the device default once.
-    // A group 4 setting on that button child is re-applied by the parent's sync afterwards.
-    if (state.resetPrestageParam) {
-        parent?.componentSendParameter(device, state.resetPrestageParam as Integer, 4, 0x01FF0000L)
-        state.remove("resetPrestageParam")
-    }
     parent?.componentSetParameters(device, params)
 }
 
@@ -98,12 +89,10 @@ void logsOff() {
 List<Map> desiredParameters() {
     List<Map> result = []
 
-    result << [num: 1, size: 1, value: toLong(setting("dimmerButtons", "p1"))] // null = no longer managed
+    result << [num: 1, size: 1, value: toLong(settings.dimmerButtons)] // null = no longer managed
 
     DIMMER_PARAMS.each { p ->
-        Long value = toLong(setting(p.name, p.legacy))
-        if (value != null && p.num in [5, 6]) value = Math.max(p.num == 6 ? 1L : 0L, Math.min(value, 99L)) // 1.x allowed 100
-        result << [num: p.num, size: 1, value: value]
+        result << [num: p.num, size: 1, value: toLong(settings[p.name])]
     }
 
     // Parameter 9: 129-227 = level (1-99) + 128 at every turn-on. Empty = left to presetLevel (1-99 = next turn-on only).
@@ -239,7 +228,7 @@ private boolean turnOnLevelSupported() {
 // On/off duration preference (parameter 3) in seconds, or null when not set: the parent then uses the device's own
 // parameter 3.
 private Integer onOffSeconds() {
-    Integer value = toInt(setting("onOffDuration", "p3"))
+    Integer value = toInt(settings.onOffDuration)
     if (value == null) return null
     value = clamp(value, 0, 255)
     return value <= 127 ? value : (value - 127) * 60
@@ -251,12 +240,6 @@ private Integer onOffSeconds() {
 private Integer fixedOnLevel() {
     Integer v = toInt(settings.onLevel)
     return v ? clamp(v, 1, 99) : null
-}
-
-private def setting(String name, String legacy) {
-    def value = settings[name]
-    if ((value == null || value.toString().trim() == "") && legacy) value = settings[legacy]
-    return value
 }
 
 private Integer toInt(value) {
@@ -275,32 +258,6 @@ private Long toLong(value) {
 
 private Integer clamp(Integer value, Integer min, Integer max) {
     return Math.max(min, Math.min(max, value))
-}
-
-// Moves settings from version 1.x to their new names and drops the ones that no longer exist.
-private void migrateSettings() {
-    DIMMER_PARAMS.each { p ->
-        def old = settings[p.legacy]
-        if (old == null) return
-        if (settings[p.name] == null) {
-            def value = p.num in [5, 6] ? Math.min(toInt(old) ?: 0, 99) : old
-            device.updateSetting(p.name, [value: value.toString(), type: p.options ? "enum" : "number"])
-        }
-        device.removeSetting(p.legacy)
-    }
-    if (settings.p1 != null) {
-        if (settings.dimmerButtons == null) {
-            device.updateSetting("dimmerButtons", [value: clamp(toInt(settings.p1) ?: 0, 0, 15).toString(), type: "enum"])
-        }
-        device.removeSetting("p1")
-    }
-    // 1.x pre-staging used the group 4 level of a button (parameters 18/26/34/42); presetLevel now sets the turn-on level.
-    if (settings.prestaging != null || settings.prestage_button != null) {
-        Integer button = clamp(toInt(settings.prestage_button) ?: 1, 1, 4)
-        state.resetPrestageParam = 10 + button * 8
-        logInfo "resetting the group 4 levels of button ${button} (parameter ${state.resetPrestageParam}) left by version 1.x pre-staging"
-    }
-    ["prestaging", "prestage_button", "p18", "p26", "p34", "p42", "levelScaling"].each { device.removeSetting(it) }
 }
 
 private void logDebug(String msg) {

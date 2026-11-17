@@ -92,12 +92,11 @@ A warning in the log may say the hub is not in the lifeline as a multi-channel a
 Update all three drivers together, then click **Configure** on the parent. Then click **Save Preferences** on each child.
 
 - **Kept:** driver names and device network IDs, so existing devices and rules keep working.
-- **Settings:** button and dimmer settings are moved to their new names. Settings that no longer exist are removed.
-- **Pre-staging** (`presetLevel`) now uses parameter 9, the device's turn-on level. Version 1.x wrote the group 4 level of a chosen button (parameters 18/26/34/42). Those parameters only affect devices associated in group 4. On the first save after the upgrade, the dimmer child resets that button's group 4 levels to the device default. The button's group 4 levels are now set on the button child.
+- **Settings are not migrated:** settings have new names, so enter them again on the parent and each child. Until then, the device keeps the values written by 1.x, except Enhanced LED control, which goes back to the driver default (on).
+- **Pre-staging** (`presetLevel`) now uses parameter 9, the device's turn-on level. Version 1.x wrote the group 4 level of a chosen button (parameters 18/26/34/42), which only affects devices associated in group 4. That level stays on the device; set the button's group 4 levels on the button child to change it.
 - **Removed commands:** `setDefaultAssociations` and `processAssociations` are replaced by **Set Association Group**, which now takes a node list per group. The non-standard `trippleTapped` event has been removed.
 - **Dimmer levels:** version 1.x also rescaled levels to the minimum/maximum range, on top of the device's own scaling. With a minimum or maximum set, the same level in a rule now comes out brighter than with 1.x. Check scenes and rules that use low levels.
 - **Debug logging** is now off by default and turns itself off after 30 minutes.
-- **Duplicate children:** children are matched on the endpoint at the end of their network ID (`-1` … `-5`), so children created under an earlier parent network ID are still used. If an earlier 2.0 build created duplicates, the oldest child of each endpoint gets the events. Configure lists the extra children in a warning, and **Remove Duplicate Children** deletes them.
 
 ## Testing
 
@@ -108,7 +107,6 @@ The suite loads all three drivers into [hubitat_ci](https://github.com/biocomp/h
 - events from button and dimmer reports;
 - outgoing commands;
 - parameter encoding and sync;
-- settings migration from 1.x;
 - associations.
 
 The radio, the hub scheduler and Z-Wave JS are not simulated.

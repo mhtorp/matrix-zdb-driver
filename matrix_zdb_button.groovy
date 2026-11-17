@@ -10,18 +10,18 @@
 import groovy.transform.Field
 
 // Each button has 8 parameters: button 1 uses 16-23, button 2 24-31, button 3 32-39, button 4 40-47.
-// offset: position within the button's block. legacy: setting name used by version 1.x.
+// offset: position within the button's block.
 @Field static final List<Map> BUTTON_PARAMS = [
-    [offset: 0, name: "buttonMode", legacy: "p16", size: 1, title: "Button function",
+    [offset: 0, name: "buttonMode", size: 1, title: "Button function",
      options: [0: "Toggle on/off, hold to dim", 1: "Turn off after timer (staircase light)", 2: "Turn on after timer",
                3: "Always off / dim down (for button pairs)", 4: "Always on / dim up (for button pairs)"],
      help: "Device default: Toggle."],
-    [offset: 1, name: "timerDuration", legacy: "p17", size: 2, title: "Timer (seconds)", range: "0..43200",
+    [offset: 1, name: "timerDuration", size: 2, title: "Timer (seconds)", range: "0..43200",
      help: "Used by the timer functions. Device default 300."],
-    [offset: 3, name: "binarySwitchMode", legacy: "p19", size: 1, title: "On/off commands from the hub control",
+    [offset: 3, name: "binarySwitchMode", size: 1, title: "On/off commands from the hub control",
      options: [0: "The LED only", 1: "The button state and LED", 2: "Everything, as a physical press (also sends to associated devices)"],
      help: "Device default: The LED only."],
-    [offset: 4, name: "ledMode", legacy: "p20", size: 1, title: "LED indication",
+    [offset: 4, name: "ledMode", size: 1, title: "LED indication",
      options: [0: "Only by colour commands", 1: "Follow button state", 2: "Follow button state (inverted)",
                5: "Follow dimmer on/off", 6: "Follow dimmer on/off (inverted)", 7: "On for 5 seconds when pressed"],
      help: "Device default: On for 5 seconds when pressed."],
@@ -79,12 +79,10 @@ void installed() {
 void updated() {
     logInfo "preferences saved"
     if (logEnable) runIn(1800, "logsOff") else unschedule("logsOff")
-    migrateSettings()
     configure()
 }
 
 void configure() {
-    ["button", "red", "green", "blue"].each { state.remove(it) }
     parent?.componentSetParameters(device, desiredParameters())
 }
 
@@ -98,7 +96,7 @@ List<Map> desiredParameters() {
     Integer base = baseParameter()
     List<Map> result = []
     BUTTON_PARAMS.each { p ->
-        def raw = setting(p.name, p.legacy)
+        def raw = settings[p.name]
         Long value = p.color ? colorToParam(raw?.toString()) : toLong(raw)
         result << [num: base + p.offset, size: p.size, value: value] // null = no longer managed
     }
@@ -193,12 +191,6 @@ private Integer baseParameter() {
     return 16 + (buttonNumber() - 1) * 8
 }
 
-private def setting(String name, String legacy) {
-    def value = settings[name]
-    if ((value == null || value.toString().trim() == "") && legacy) value = settings[legacy]
-    return value
-}
-
 private Long colorToParam(String hex) {
     String h = hex?.trim()?.replaceFirst(/^#/, "")
     if (!h) return null
@@ -219,18 +211,6 @@ private Long toLong(value) {
         return new BigDecimal(value.toString().trim()).longValue()
     } catch (NumberFormatException ignored) {
         return null
-    }
-}
-
-// Moves settings from version 1.x to their new names.
-private void migrateSettings() {
-    BUTTON_PARAMS.findAll { it.legacy }.each { p ->
-        def old = settings[p.legacy]
-        if (old == null) return
-        if (settings[p.name] == null) {
-            device.updateSetting(p.name, [value: old.toString(), type: p.options ? "enum" : "number"])
-        }
-        device.removeSetting(p.legacy)
     }
 }
 
