@@ -630,15 +630,25 @@ private List associationGetCommands() {
 /* ---------- Children ---------- */
 
 private void createChildDevices() {
-    BUTTON_EPS.each { ep -> addChildIfMissing(ep, "Matrix ZDB 5100 (Button)", "Button ${ep}") }
-    addChildIfMissing(DIMMER_EP, "Matrix ZDB 5100 (Dimmer)", "Dimmer")
+    BUTTON_EPS.each { ep -> ensureChild(ep, "Matrix ZDB 5100 (Button)", "Button ${ep}") }
+    ensureChild(DIMMER_EP, "Matrix ZDB 5100 (Dimmer)", "Dimmer")
 }
 
-private void addChildIfMissing(Integer ep, String driver, String label) {
-    if (childFor(ep)) return
+// Creates the child, or fixes the name of an existing one (1.x named them ch1-ch5). A label the user set is kept.
+private void ensureChild(Integer ep, String driver, String label) {
+    String name = "Matrix ZDB 5100 ${label}"
+    def cd = childFor(ep)
+    if (cd) {
+        if (cd.name != name) {
+            logInfo "renaming ${cd.displayName} from '${cd.name}' to '${name}'"
+            cd.setName(name)
+        }
+        if (!cd.label) cd.setLabel("${device.displayName} ${label}".toString())
+        return
+    }
     String dni = "${device.deviceNetworkId}-${ep}"
     try {
-        addChildDevice("mhtorp", driver, dni, [name: "Matrix ZDB 5100 ${label}", label: "${device.displayName} ${label}", isComponent: true])
+        addChildDevice("mhtorp", driver, dni, [name: name, label: "${device.displayName} ${label}", isComponent: true])
         logInfo "created ${label}"
     } catch (Exception e) {
         log.error "${device.displayName}: could not create ${label}. Is the driver '${driver}' installed? ${e.message}"

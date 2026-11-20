@@ -92,6 +92,7 @@ A warning in the log may say the hub is not in the lifeline as a multi-channel a
 Update all three drivers together, then click **Configure** on the parent. Then click **Save Preferences** on each child.
 
 - **Kept:** driver names and device network IDs, so existing devices and rules keep working.
+- **Child names:** Configure renames the children from `ch1`-`ch5` to `Matrix ZDB 5100 Button 1` ... `Matrix ZDB 5100 Dimmer`. Labels you have set are kept.
 - **Settings are not migrated:** settings have new names, so enter them again on the parent and each child. Until then, the device keeps the values written by 1.x, except Enhanced LED control, which goes back to the driver default (on).
 - **Pre-staging** (`presetLevel`) now uses parameter 9, the device's turn-on level. Version 1.x wrote the group 4 level of a chosen button (parameters 18/26/34/42), which only affects devices associated in group 4. That level stays on the device; set the button's group 4 levels on the button child to change it.
 - **Removed commands:** `setDefaultAssociations` and `processAssociations` are replaced by **Set Association Group**, which now takes a node list per group. The non-standard `trippleTapped` event has been removed.

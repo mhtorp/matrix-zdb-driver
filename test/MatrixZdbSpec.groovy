@@ -136,6 +136,10 @@ class MatrixZdbSpec extends Specification {
         GroovyMock(ChildDeviceWrapper) {
             _ * getDeviceNetworkId() >> { kid.dni ?: "2A-${ep}".toString() }
             _ * getDisplayName() >> kid.name
+            _ * getName() >> { kid.devName }
+            _ * setName(_ as String) >> { String n -> kid.devName = n }
+            _ * getLabel() >> { kid.label }
+            _ * setLabel(_ as String) >> { String l -> kid.label = l }
             _ * getId() >> { kid.id ?: "${100 + ep}".toString() }
             _ * currentValue(_ as String) >> { String n -> kid.attrs[n] }
             _ * currentValue(_ as String, _) >> { String n, b -> kid.attrs[n] }
@@ -174,8 +178,9 @@ class MatrixZdbSpec extends Specification {
      */
     private void load(Map settings = [:], Map<Integer, Map> childSettings = [:], boolean withChildren = true) {
         (1..5).each { ep ->
-            Map kid = [name: ep == 5 ? "Dimmer" : "Button ${ep}".toString(), state: [:], attrs: [:], events: [],
-                       settingUpdates: [:], data: [:], exists: withChildren]
+            String label = ep == 5 ? "Dimmer" : "Button ${ep}".toString()
+            Map kid = [name: label, devName: "Matrix ZDB 5100 ${label}".toString(), label: label, state: [:], attrs: [:],
+                       events: [], settingUpdates: [:], data: [:], exists: withChildren]
             kid.wrapper = childWrapper(ep, kid)
             kids[ep] = kid
         }
@@ -211,6 +216,8 @@ class MatrixZdbSpec extends Specification {
                 created << [ns: ns, type: type, dni: dni, props: props]
                 Map kid = kids[dni.split("-")[-1] as Integer]
                 kid.exists = true
+                kid.devName = props.name
+                kid.label = props.label
                 kid.wrapper
             }
         }
@@ -306,6 +313,25 @@ class MatrixZdbSpec extends Specification {
         created.isEmpty()
         kids[5].attrs.level == 40
         kids[2].attrs.switch == "on"
+    }
+
+    def "configure fixes the names of existing children and keeps the labels the user set"() {
+        given: "children as created by 1.x, one relabelled by the user and one without a label"
+        load()
+        (1..5).each { kids[it].devName = "ch${it}".toString() }
+        kids[5].label = "Spots"
+        kids[2].label = null
+
+        when:
+        parent.configure()
+
+        then:
+        created.isEmpty()
+        (1..4).every { kids[it].devName == "Matrix ZDB 5100 Button ${it}".toString() }
+        kids[5].devName == "Matrix ZDB 5100 Dimmer"
+        kids[5].label == "Spots"
+        kids[2].label == "ZDB Button 2"
+        kids[1].label == "Button 1"
     }
 
     def "configure writes every desired parameter again, even if the cache says it is set"() {
