@@ -533,12 +533,34 @@ class MatrixZdbSpec extends Specification {
 
         when:
         kids[2].script.setColorOn(255, 0, 0)
+
+        then: "written straight away, not after the debounce"
+        kids[2].settingUpdates.onColor == [value: "FF0000", type: "text"]
+        !scheduled.contains("syncParameters")
+        hubCommands == [set(30, 0xFF000000L - (1L << 32), 4), "delay 400", "ConfigurationGet[parameterNumber:30]"] // button 2: parameter 24 + 6
+        parentState.desiredConfig["30"] == [size: 4, value: 0xFF000000L]
+        parentAttrs.syncStatus == "1 pending"
+
+        when: "the device confirms it, a later sync writes nothing"
+        configReport(30, [0xFF, 0, 0, 0])
+        hubCommands.clear()
         parent.syncParameters()
+        then:
+        configSets().isEmpty()
+        parentAttrs.syncStatus == "synced"
+    }
+
+    def "setColorOff on every button, then off(): the colours reach the device before the off command"() {
+        given:
+        load()
+
+        when:
+        (1..4).each { kids[it].script.setColorOff(255, 255, 255) }
+        kids[1].script.off()
 
         then:
-        kids[2].settingUpdates.onColor == [value: "FF0000", type: "text"]
-        scheduled.contains("syncParameters")
-        configSets() == [set(30, 0xFF000000L - (1L << 32), 4)] // button 2: parameter 24 + 6
+        List<String> sent = hubCommands.findAll { it.startsWith("ConfigurationSet") || it.contains("SwitchBinarySet") }
+        sent == [23, 31, 39, 47].collect { set(it, 0xFFFFFF00L - (1L << 32), 4) } + ["EP1>SwitchBinarySet[switchValue:0]"]
     }
 
     // ---------- dimmer ----------

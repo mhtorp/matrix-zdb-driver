@@ -346,6 +346,23 @@ void componentSetParameters(cd, List<Map> params) {
     runIn(2, "syncParameters") // debounce several children saving at once
 }
 
+// Like componentSetParameters, but writes the parameters straight away, whatever the cached value, instead of after
+// the debounce. Used by commands (setColorOn, setColorOff), so that a command sent right after them, such as off()
+// to show the new off-state colour, reaches the device after the new values.
+void componentWriteParameters(cd, List<Map> params) {
+    logDebug "componentWriteParameters(${cd.displayName}, ${params})"
+    storeDesired(params)
+    List cmds = []
+    params.findAll { it.value != null }.each {
+        Integer num = it.num as Integer
+        Integer size = it.size as Integer
+        cmds << zwave.configurationV1.configurationSet(parameterNumber: num, size: size, scaledConfigurationValue: toSigned(it.value as Long, size))
+        cmds << zwave.configurationV1.configurationGet(parameterNumber: num)
+    }
+    sendCommands(cmds)
+    updateSyncStatus()
+}
+
 // Writes a parameter once, regardless of the cached value, without making it a desired setting.
 // Used by the dimmer to write its turn-on level (parameter 9) straight away, or to clear it.
 void componentSendParameter(cd, Integer num, Integer size, Long value) {

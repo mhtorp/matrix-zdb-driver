@@ -174,13 +174,14 @@ void parse(List<Map> events) {
 
 /* ---------- Helpers ---------- */
 
-// Stores the colour as the preference too, so the parent's parameter sync does not undo it.
+// Stores the colour as the preference too, so the parent's parameter sync does not undo it. Written straight away,
+// so a command sent right after this one (e.g. off() to show the new off-state colour) arrives after it.
 private void setStateColor(String settingName, Integer offset, red, green, blue) {
     List<Integer> rgb = [red, green, blue].collect { Math.max(0, Math.min(255, toLong(it)?.intValue() ?: 0)) }
     String hex = String.format("%02X%02X%02X", rgb[0], rgb[1], rgb[2])
     logInfo "${settingName == 'onColor' ? 'on' : 'off'}-state LED colour set to ${hex}"
     device.updateSetting(settingName, [value: hex, type: "text"])
-    parent?.componentSetParameters(device, [[num: baseParameter() + offset, size: 4, value: colorToParam(hex)]])
+    parent?.componentWriteParameters(device, [[num: baseParameter() + offset, size: 4, value: colorToParam(hex)]])
 }
 
 private Integer buttonNumber() {
