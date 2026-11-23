@@ -41,6 +41,7 @@ Each event's value is the button number, 1-4. Use the parent device for button r
 **Dimmer child.** It supports `on`, `off`, `setLevel` (with optional duration), `startLevelChange` and `stopLevelChange`.
 
 - `on`, `off` and `setLevel` without a duration use the on/off duration preference (parameter 3). The dimming duration (parameter 2) is used when a button is held and for `startLevelChange`.
+- `on` does nothing if the dimmer is already on, or if `setLevel` started turning it on in the last 2 seconds. Integrations such as Google Home send `on` and `setLevel` together in either order; otherwise an `on` arriving second would replace the requested level with the turn-on level, or with full brightness during a fade.
 
 - `presetLevel` sets a level without turning the light on:
   - **Turn-on level preference set:** `presetLevel` changes the preference. Every turn-on uses the new level until the next `presetLevel`.
@@ -48,7 +49,7 @@ Each event's value is the button number, 1-4. Use the parent device for button r
 
   `setLevel` never uses up the preset and never writes a parameter. With firmware 1.08 or later the device applies the level from parameter 9, to both `on()` and buttons. Older firmware ignores parameter 9, so only `on()` uses it there. If the light is on, `presetLevel` also sets the level now.
 - **Fixed turn-on level** works the same way: from the hub on any firmware, and also from the buttons with firmware 1.08 or later.
-- **Minimum level** and **Maximum level** are applied by the device: it spreads 1-99% over that range, so Hubitat levels are passed on unchanged.
+- **Minimum level** and **Maximum level** are applied by the device: it spreads 1-99% over that range, so Hubitat levels are passed on unchanged. A minimum of 0 is written as 1, which is what the device stores.
 - **Buttons that control the dimmer** chooses which buttons operate the dimmer locally.
 
 **Generic component drivers.** The parent uses Hubitat's standard component interface. You can switch a child to **Generic Component Switch** or **Generic Component Dimmer** if you don't need its device-specific settings.

@@ -7,6 +7,7 @@
  */
 
 import groovy.transform.Field
+import java.util.concurrent.ConcurrentHashMap
 
 @Field static final List<Map> DIMMER_PARAMS = [
     [num: 2, name: "dimDuration", size: 1, title: "Dimming duration, 0-100%", range: "0..255",
@@ -17,10 +18,15 @@ import groovy.transform.Field
      options: [0: "No dimming (on/off only)", 1: "Trailing edge (LED, electronic transformers)", 2: "Leading edge (iron-core transformers)"],
      help: "Device default: Trailing edge. Iron-core transformers must use leading edge, or the dimmer can be damaged."],
     [num: 5, name: "minLevel", size: 1, title: "Minimum level (%)", range: "0..99",
-     help: "Actual output at the lowest level; the device spreads 1-99% over the minimum-maximum range. Device default 0."],
+     help: "Actual output at the lowest level; the device spreads 1-99% over the minimum-maximum range. Device default 0; firmware 1.09 stores 0 as 1, so 0 is sent as 1."],
     [num: 6, name: "maxLevel", size: 1, title: "Maximum level (%)", range: "1..99",
      help: "Actual output at 99%. Device default 99."]
 ]
+
+// When setLevel last started turning the dimmer on or changing its level, per device (see on()). Static rather than
+// state: state is saved when a command finishes, and integrations send on() and setLevel() about 100 ms apart.
+@Field static final Map<String, Long> LEVEL_SET_AT = new ConcurrentHashMap<>()
+@Field static final Long LEVEL_SET_WINDOW_MS = 2000L
 
 // Parameter 1 is a bitmask (button 1 = 1, 2 = 2, 3 = 4, 4 = 8); one option per combination.
 @Field static final Map DIMMER_BUTTONS = (0..15).collectEntries { Integer mask ->
@@ -92,7 +98,9 @@ List<Map> desiredParameters() {
     result << [num: 1, size: 1, value: toLong(settings.dimmerButtons)] // null = no longer managed
 
     DIMMER_PARAMS.each { p ->
-        result << [num: p.num, size: 1, value: toLong(settings[p.name])]
+        Long value = toLong(settings[p.name])
+        if (p.num == 5 && value == 0L) value = 1L // the device reports 0 back as 1, which would never count as synced
+        result << [num: p.num, size: 1, value: value]
     }
 
     // Parameter 9: 129-227 = level (1-99) + 128 at every turn-on. Empty = left to presetLevel (1-99 = next turn-on only).
@@ -109,7 +117,14 @@ List<Map> desiredParameters() {
 // Without a duration, on, off and setLevel use the on/off duration preference (parameter 3).
 
 // Turns on at the turn-on level or the preset level if there is one, otherwise at the last level.
+// A dimmer that is on, or that setLevel has just started turning on, keeps its level: integrations such as Google Home
+// send on() and setLevel() together in either order, and the device would apply the turn-on level, or go to full
+// brightness for a plain on during a fade.
 void on() {
+    if (device.currentValue("switch") == "on" || levelJustSet()) {
+        logDebug "on(): already on, level kept"
+        return
+    }
     Integer fixed = fixedOnLevel()
     Integer preset = toInt(state.presetLevel)
     state.remove("presetLevel")
@@ -132,6 +147,7 @@ void on() {
 
 void off() {
     logDebug "off()"
+    LEVEL_SET_AT.remove(deviceKey())
     parent?.componentOff(device, onOffSeconds())
 }
 
@@ -140,6 +156,7 @@ void setLevel(level, duration = null) {
     Integer value = deviceLevel(l)
     def secs = duration != null && duration.toString().trim() != "" ? duration : onOffSeconds()
     logDebug "setLevel(${l}, ${duration}) -> device level ${value}, ${secs} s"
+    if (value > 0) LEVEL_SET_AT.put(deviceKey(), now()) else LEVEL_SET_AT.remove(deviceKey())
     parent?.componentSetLevel(device, value, secs)
 }
 
@@ -235,6 +252,16 @@ private Integer onOffSeconds() {
 }
 
 /* ---------- Helpers ---------- */
+
+// True shortly after a setLevel above 0, before the device's report has turned the switch attribute on.
+private boolean levelJustSet() {
+    Long at = LEVEL_SET_AT.get(deviceKey())
+    return at != null && now() - at < LEVEL_SET_WINDOW_MS
+}
+
+private String deviceKey() {
+    return "${device.id}".toString()
+}
 
 // 1-99, or null when not set. 0 (allowed by earlier 2.0 builds) counts as not set.
 private Integer fixedOnLevel() {

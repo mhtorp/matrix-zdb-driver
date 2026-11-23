@@ -599,16 +599,16 @@ class MatrixZdbSpec extends Specification {
         kids[5].script.setLevel(0)
         kids[5].script.setLevel(40, 5)
         kids[5].script.setLevel(40, 300)
-        kids[5].script.on()
         kids[5].script.off()
+        kids[5].script.on()
 
         then:
         hubCommands == ["EP5>SwitchMultilevelSet[dimmingDuration:0, value:99]", // on/off duration (unknown = 0)
                         "EP5>SwitchMultilevelSet[dimmingDuration:0, value:0]",
                         "EP5>SwitchMultilevelSet[dimmingDuration:5, value:40]",
                         "EP5>SwitchMultilevelSet[dimmingDuration:132, value:40]", // 0x7F + 5 minutes
-                        "EP5>SwitchMultilevelSet[dimmingDuration:255, value:255]",
-                        "EP5>SwitchMultilevelSet[dimmingDuration:255, value:0]"]
+                        "EP5>SwitchMultilevelSet[dimmingDuration:255, value:0]",
+                        "EP5>SwitchMultilevelSet[dimmingDuration:255, value:255]"]
         scheduled.count { it == "pollDimmer" } == 6
     }
 
@@ -635,12 +635,95 @@ class MatrixZdbSpec extends Specification {
         parentState.deviceConfig = ["2": 7, "3": 10]
 
         when:
+        kids[5].script.on()
         kids[5].script.setLevel(40)
+
+        then:
+        hubCommands == ["EP5>SwitchMultilevelSet[dimmingDuration:255, value:255]", // the device uses parameter 3
+                        "EP5>SwitchMultilevelSet[dimmingDuration:10, value:40]"]
+    }
+
+    def "on() keeps the level when setLevel came first, as Google Home sends them (turn-on level #onLevel)"() {
+        given: "as logged: setLevel(60) and on() about 100 ms apart, before the device's report"
+        load([:], [5: [onOffDuration: 1, onLevel: onLevel]])
+        kids[5].data.firmwareVersion = "1.09"
+        kids[5].attrs.switch = startSwitch
+
+        when:
+        kids[5].script.setLevel(60)
+        clock += 100
         kids[5].script.on()
 
         then:
-        hubCommands == ["EP5>SwitchMultilevelSet[dimmingDuration:10, value:40]",
-                        "EP5>SwitchMultilevelSet[dimmingDuration:255, value:255]"] // the device uses parameter 3
+        hubCommands == ["EP5>SwitchMultilevelSet[dimmingDuration:1, value:60]"]
+
+        where:
+        onLevel | startSwitch
+        40      | "on"
+        40      | "off"
+        null    | "off"
+    }
+
+    def "on() before setLevel turns on, and setLevel then sets the level"() {
+        given:
+        load([:], [5: [onOffDuration: 1, onLevel: 40]])
+        kids[5].data.firmwareVersion = "1.09"
+        kids[5].attrs.switch = "off"
+
+        when:
+        kids[5].script.on()
+        clock += 100
+        kids[5].script.setLevel(60)
+
+        then:
+        hubCommands == ["EP5>SwitchMultilevelSet[dimmingDuration:1, value:40]",
+                        "EP5>SwitchMultilevelSet[dimmingDuration:1, value:60]"]
+    }
+
+    def "on() while on sends nothing and keeps a one-off preset for the next turn-on"() {
+        given:
+        load()
+        kids[5].data.firmwareVersion = "1.05"
+        kids[5].attrs.switch = "off"
+        kids[5].script.presetLevel(30)
+        kids[5].attrs.switch = "on" // turned on by hand
+        hubCommands.clear()
+
+        when:
+        kids[5].script.on()
+
+        then:
+        hubCommands.isEmpty()
+        kids[5].state.presetLevel == 30
+    }
+
+    def "on() turns on again once the setLevel window has passed or off() was sent"() {
+        given:
+        load()
+        kids[5].attrs.switch = "off" // the reports after setLevel were lost, or off() turned it off
+
+        when:
+        kids[5].script.setLevel(60)
+        clock += 2_000
+        kids[5].script.on()
+        kids[5].script.setLevel(60)
+        kids[5].script.off()
+        kids[5].script.on()
+
+        then:
+        hubCommands.findAll { it.contains("value:255") }.size() == 2
+    }
+
+    def "a minimum level of 0 is written as 1, the value the device stores"() {
+        given:
+        load([:], [5: [minLevel: 0]])
+
+        when:
+        kids[5].script.updated()
+        parent.syncParameters()
+
+        then:
+        configSets() == [set(5, 1, 1)]
     }
 
     def "dimmer level change uses typed Switch Multilevel v4 commands"() {
